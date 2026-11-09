@@ -1,0 +1,41 @@
+@page "/runs"
+@inject RunService Runs
+@inject IDialogService Dialogs
+@inject NavigationManager Nav
+
+<PageTitle>@T("Runs — SPOMover")</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+    <MudText Typo="Typo.h5">@T("Runs")</MudText>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="NewRun">@T("New run")</MudButton>
+</MudStack>
+
+<MudTable Items="_runs" Dense="true" Hover="true" OnRowClick="@((TableRowClickEventArgs<RunRow> e) => Nav.NavigateTo($"runs/{e.Item!.Id}"))" T="RunRow" RowStyle="cursor:pointer">
+    <HeaderContent>
+        <MudTh>@T("No.")</MudTh><MudTh>@T("Mode")</MudTh><MudTh>@T("Profile")</MudTh><MudTh>@T("Status")</MudTh><MudTh>@T("Created")</MudTh><MudTh>@T("Finished")</MudTh><MudTh>@T("Retry of run")</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Id</MudTd>
+        <MudTd>@Ui.Mode(context.Mode)</MudTd>
+        <MudTd>@context.ProfileName</MudTd>
+        <MudTd><MudChip T="string" Size="Size.Small" Color="Ui.RunColor(context.Status)">@Ui.RunStatus(context.Status)</MudChip></MudTd>
+        <MudTd>@Ui.Time(context.CreatedAt)</MudTd>
+        <MudTd>@Ui.Time(context.FinishedAt)</MudTd>
+        <MudTd>@(context.ParentId?.ToString(Ui.Culture) ?? "—")</MudTd>
+    </RowTemplate>
+    <NoRecordsContent>@T("No runs yet.")</NoRecordsContent>
+</MudTable>
+
+@code {
+    private IReadOnlyList<RunRow> _runs = [];
+
+    protected override void OnInitialized() => _runs = Runs.Store.ListRuns(500);
+
+    private async Task NewRun()
+    {
+        var dialog = await Dialogs.ShowAsync<NewRunDialog>(T("New run"), new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        if (await dialog.Result is { Canceled: false, Data: long id })
+            Nav.NavigateTo($"runs/{id}");
+    }
+}

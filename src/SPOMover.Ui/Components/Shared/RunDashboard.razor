@@ -1,0 +1,499 @@
+@implements IDisposable
+@inject StatusService StatusService
+@inject RunService Runs
+
+@if (_status is null)
+{
+    <MudProgressCircular Indeterminate="true" />
+    return;
+}
+
+@{
+    var s = _status;
+    var run = s.Run;
+    long done = s.Files - s.NonFinal;
+    double percent = s.Files > 0 ? 100.0 * done / s.Files : 0;
+    long failed = s.Counts.Where(c => c.Key.StartsWith("failed:", StringComparison.Ordinal)).Sum(c => c.Value);
+    long deferred = Count(FileStatuses.Deferred);
+    bool apply = run.Mode == RunModes.Apply;
+    bool cleanup = run.Mode == RunModes.Cleanup;
+    long moved = Count(FileStatuses.Moved) + Count(FileStatuses.Verified);
+    long unverified = Count("failed:verify");
+    var elapsed = (run.FinishedAt ?? DateTimeOffset.UtcNow) - (run.StartedAt ?? run.CreatedAt);
+    string speedTitle = apply ? T("Move speed") : cleanup ? T("Check speed") : T("Listing speed");
+}
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2">
+    <MudText Typo="Typo.h5">@T($"Run {run.Id}")</MudText>
+    <HelpButton Section="3.6" />
+    <MudChip T="string" @key="run.Status" Color="Ui.RunColor(run.Status)" Size="Size.Small">@Ui.RunStatus(run.Status)@(s.Paused ? " " + T("(paused)") : "")</MudChip>
+    <MudText Typo="Typo.body2">@Ui.Mode(run.Mode) · @T("profile") <b>@run.ProfileName</b></MudText>
+    <MudSpacer />
+    <RunControls Status="s" Changed="Refresh" />
+</MudStack>
+
+@if (run.StopReason is { Length: > 0 } reason && run.Status is RunStatuses.Aborted or RunStatuses.Stopped)
+{
+    <MudAlert Severity="@(run.Status == RunStatuses.Aborted ? Severity.Error : Severity.Info)" Class="mb-2">@reason</MudAlert>
+}
+@foreach (var note in s.Notes ?? [])
+{
+    <MudAlert Severity="@(note.Level == "warning" ? Severity.Warning : Severity.Info)" Dense="true" Class="mb-2">@note.Message</MudAlert>
+}
+
+@if (!apply && s.Targets is { Count: > 0 } targets)
+{
+    var listing = Listing(s, targets);
+    <MudPaper Class="pa-3 mb-3" Elevation="1">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+            <MudText Typo="Typo.body2">@((MarkupString)listing.Text)</MudText>
+            <MudText Typo="Typo.body2">@T($"Started: {Ui.Time(run.StartedAt)} · duration: {Ui.Duration(elapsed)}")
+                @if (listing.Eta is { } eta)
+                {
+                    <span> · @T("to completion ≈") <b>@Ui.Duration(eta)</b></span>
+                }
+            </MudText>
+        </MudStack>
+        @if (listing.Percent is { } p)
+        {
+            <MudProgressLinear Color="Color.Primary" Value="p" Size="Size.Large" Class="mt-2" Rounded="true" />
+        }
+        else if (listing.Moving)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Size="Size.Large" Class="mt-2" Rounded="true" />
+        }
+        @if (listing.Stage is { Length: > 0 } stage)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary mt-1" Style="display:block">@stage</MudText>
+        }
+    </MudPaper>
+}
+else
+{
+<MudPaper Class="pa-3 mb-3" Elevation="1">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+        <MudText Typo="Typo.body2">@((MarkupString)T($"Processed <b>{Ui.N(done)}</b> of <b>{Ui.N(s.Files)}</b> ({percent:0.0}%)"))</MudText>
+        <MudText Typo="Typo.body2">@T($"Started: {Ui.Time(run.StartedAt)} · duration: {Ui.Duration(elapsed)}")
+            @if (StatusService.Eta(s) is { } eta)
+            {
+                <span> · @T("to completion ≈") <b>@Ui.Duration(eta)</b></span>
+            }
+        </MudText>
+    </MudStack>
+    <MudProgressLinear Color="Color.Primary" Value="percent" Size="Size.Large" Class="mt-2" Rounded="true" />
+</MudPaper>
+}
+
+<MudGrid Spacing="2" Class="mb-2">
+    @if (cleanup)
+    {
+        <StatCard Title="@T("Deleted (to the recycle bin)")" Value="@Ui.N(Count(FileStatuses.Deleted))" Hint="@T($"of {Ui.N(s.Files)} folders to check")" Color="Color.Primary" />
+        <StatCard Title="@T("Left, not empty")" Value="@Ui.N(Count(FileStatuses.SkippedNotEmpty))" Hint="@T("something is left in them; see the Files tab, comment column")" />
+        <StatCard Title="@T("Already gone")" Value="@Ui.N(Count(FileStatuses.SkippedNotFound))" Hint="@T("moved together with the folder of a batch")" />
+    }
+    else if (apply)
+    {
+        <StatCard Title="@T("Moved")" Value="@Ui.N(moved)" Hint="@T($"of {Ui.N(s.Files)} files in the plan")" Color="Color.Primary" />
+        <StatCard Title="@T("Batches done")" Value="@($"{Ui.N(_waves.Sum(w => w.Done))} / {Ui.N(_waves.Sum(w => w.Batches))}")" Hint="@BatchHint()" Href="@($"runs/{run.Id}?tab=batches")" />
+        @if (Count(FileStatuses.Verified) > 0 || unverified > 0)
+        {
+            <StatCard Title="@T("Verified")" Value="@Ui.N(Count(FileStatuses.Verified))" Hint="@T($"not confirmed: {Ui.N(unverified)}")" Color="@(unverified > 0 ? Color.Warning : Color.Success)" />
+        }
+    }
+    else
+    {
+        <StatCard Title="@T("Files found")" Value="@Ui.N(s.Live?.Found ?? s.Files)" />
+    }
+    @if (!cleanup)
+    {
+        <StatCard Title="@T("Total size")" Value="@Ui.Size(s.Bytes)" />
+    }
+    <StatCard Title="@T("Errors")" Value="@Ui.N(failed)" Hint="@ErrorsHint()" Color="@(failed > 0 ? Color.Error : Color.Default)" Href="@($"runs/{run.Id}?tab=errors&show=failed")" />
+    @if (!apply && !cleanup)
+    {
+        <StatCard Title="@T("Checked out")" Value="@Ui.N(s.Checkouts)" Hint="@T("in the source, together with files without a published version; the Check-out report")"
+                  Color="@(s.Checkouts > 0 ? Color.Warning : Color.Default)" />
+    }
+    @if (deferred > 0)
+    {
+        <StatCard Title="@T("Deferred")" Value="@Ui.N(deferred)" Hint="@T("locked, waiting for a wave")" Color="Color.Warning" />
+    }
+    <StatCard Title="@T("Need attention")" Value="@Ui.N(s.Attention)" Color="@(s.Attention > 0 ? Color.Warning : Color.Default)" Href="@($"runs/{run.Id}?tab=errors&show=attention")" />
+    @if (s.Live is { } live)
+    {
+        <StatCard Title="@speedTitle" Value="@(cleanup ? T($"{live.FilesPerMinute:0} folders/min") : T($"{live.FilesPerMinute:0} files/min"))" Hint="@ThrottleHint(live)" />
+    }
+</MudGrid>
+
+@if (s.Live is { Apps.Count: > 0 } liveApps)
+{
+    <AppLoadPanel Metrics="liveApps" />
+}
+
+@if (apply && _waves.Count > 0)
+{
+    <MudPaper Class="pa-3 mt-1 mb-3" Elevation="1">
+        <MudText Typo="Typo.subtitle1" Class="mb-1">@T("Waves")</MudText>
+        <MudSimpleTable Dense="true">
+            <thead><tr><th>@T("Wave")</th><th>@T("Batch count")</th><th>@T("Done")</th><th>@T("Running")</th><th>@T("Partial")</th><th>@T("Deferred")</th><th>@T("Errors")</th><th>@T("Files moved")</th><th style="min-width:160px"></th></tr></thead>
+            <tbody>
+                @foreach (var w in _waves)
+                {
+                    double pct = w.Files > 0 ? 100.0 * w.FilesDone / w.Files : 0;
+                    <tr>
+                        <td>@w.Wave</td><td>@Ui.N(w.Batches)</td><td>@Ui.N(w.Done)</td><td>@Ui.N(w.InProgress)</td><td>@Ui.N(w.Partial)</td><td>@Ui.N(w.Deferred)</td><td>@Ui.N(w.Failed)</td>
+                        <td>@T($"{Ui.N(w.FilesDone)} of {Ui.N(w.Files)}")</td>
+                        <td><MudProgressLinear Value="pct" Color="Color.Primary" Rounded="true" /></td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    </MudPaper>
+}
+
+<MudPaper Class="pa-3 mt-1 mb-3" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2">
+        <MudText Typo="Typo.subtitle1">@T("Over time")</MudText>
+        <MudSpacer />
+        @if (_times.Length >= 2)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@T("Select an area with the mouse to zoom in; double-click shows the whole run.")</MudText>
+            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined">
+                @foreach (var (label, period) in Periods)
+                {
+                    <MudButton OnClick="@(() => _progressChart!.ShowLast(period))">@label</MudButton>
+                }
+            </MudButtonGroup>
+        }
+    </MudStack>
+    @if (_times.Length >= 2)
+    {
+        <MudGrid Spacing="2" Class="mt-1">
+            <MudItem xs="12" lg="6">
+                <MudText Typo="Typo.body2" Class="mb-1"><b>@T("Progress")</b></MudText>
+                <TimeChart @ref="_progressChart" Group="@($"run-{RunId}")" Times="_times" Data="_progress" />
+            </MudItem>
+            <MudItem xs="12" lg="6">
+                <MudText Typo="Typo.body2" Class="mb-1"><b>@T("Speed and errors")</b> <span class="mud-text-secondary">@T("(errors — right axis)")</span></MudText>
+                <TimeChart Group="@($"run-{RunId}")" Times="_times" Data="_speed" />
+            </MudItem>
+        </MudGrid>
+    }
+    else
+    {
+        <MudText Typo="Typo.caption">@T("Charts appear after a few minutes of the run (a snapshot once a minute).")</MudText>
+    }
+</MudPaper>
+
+@if (!cleanup)
+{
+<MudGrid Spacing="2">
+    <MudItem xs="12" md="6">
+        <Breakdown Title="@T("By format (15 largest)")" Rows="_byFormat" Share="!_isApply" />
+    </MudItem>
+    <MudItem xs="12" md="6">
+        <Breakdown Title="@(_isApply ? T("By target library") : T("By library"))" Rows="@(_isApply ? _byTarget : LibraryRows())" Stacked="true" Share="!_isApply" />
+    </MudItem>
+</MudGrid>
+}
+
+@code {
+    [Parameter, EditorRequired] public long RunId { get; set; }
+
+    private RunStatus? _status;
+    private IReadOnlyList<StateStore.WaveProgress> _waves = [];
+    private bool _isApply;
+    private static (string Label, TimeSpan? Period)[] Periods =>
+        [(T("1 h"), TimeSpan.FromHours(1)), (T("6 h"), TimeSpan.FromHours(6)), (T("24 h"), TimeSpan.FromDays(1)), (T("Whole run"), null)];
+
+    private IReadOnlyList<TimeChart.Series> _progress = [];
+    private IReadOnlyList<TimeChart.Series> _speed = [];
+    private double[] _times = [];
+    private TimeChart? _progressChart;
+    private List<Breakdown.Row> _byFormat = [];
+    private List<Breakdown.Row> _byTarget = [];
+    private Timer? _timer;
+    private DateTimeOffset _slowRefresh = DateTimeOffset.MinValue;
+    private long _shownRun;
+    private string? _lastStatus;
+    private volatile bool _slowLoading;
+
+    protected override void OnParametersSet()
+    {
+        if (_shownRun != RunId)
+        {
+            _shownRun = RunId;
+            _slowRefresh = DateTimeOffset.MinValue;
+            Load();
+        }
+        _timer ??= new Timer(_ => InvokeAsync(() => { Load(); StateHasChanged(); }), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    private void Refresh()
+    {
+        _slowRefresh = DateTimeOffset.MinValue;
+        Load(fresh: true);
+        StateHasChanged();
+    }
+
+    private void Load(bool fresh = false)
+    {
+        _status = StatusService.Get(RunId, fresh);
+        if (_status is null)
+            return;
+        _isApply = _status.Run.Mode == RunModes.Apply;
+        if (_isApply)
+            _waves = Runs.Store.GetWaveProgress(RunId);
+        // Heavier queries less often: charts and breakdowns every 15 seconds, and at once when the run changes its status.
+        bool statusChanged = _status.Run.Status != _lastStatus;
+        _lastStatus = _status.Run.Status;
+        if (!statusChanged && DateTimeOffset.UtcNow - _slowRefresh < TimeSpan.FromSeconds(15))
+            return;
+        _slowRefresh = DateTimeOffset.UtcNow;
+        _ = LoadSlowAsync();
+    }
+
+    /// <summary>
+    /// Breakdowns and charts read many rows on large runs; they are loaded off the UI thread,
+    /// so the counters appear at once and these parts follow a moment later.
+    /// </summary>
+    private async Task LoadSlowAsync()
+    {
+        if (_slowLoading)
+            return;
+        _slowLoading = true;
+        try
+        {
+            long runId = RunId;
+            var loaded = await Task.Run(() =>
+            {
+                var targets = RunConfigTargets();
+                var byFormat = Runs.Store.BreakdownBy(runId, "ext").Take(15)
+                    .Select(b => new Breakdown.Row(b.Key.Length == 0 ? T("(no extension)") : b.Key.TrimStart('.'), b.Total, b.Bytes, b.Finished, b.Failed)).ToList();
+                var breakdown = Runs.Store.BreakdownBy(runId, _isApply ? "dest_idx" : "target_idx").ToDictionary(b => b.Key);
+                // Every library of the profile, empty ones too: an empty target library is worth seeing before files go there.
+                var byTarget = Enumerable.Range(0, targets.Count).Select(i => i.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    .Concat(breakdown.Keys).Distinct()
+                    .Select(k => ToTargetRow(breakdown.TryGetValue(k, out var b) ? b : new StateStore.Breakdown(k, 0, 0, 0, 0), targets)).ToList();
+                return (byFormat, byTarget, charts: Charts(Runs.Store, runId));
+            });
+            if (runId != RunId)
+                return;
+            await InvokeAsync(() =>
+            {
+                (_byFormat, _byTarget) = (loaded.byFormat, loaded.byTarget);
+                (_times, _progress, _speed) = loaded.charts;
+                StateHasChanged();
+            });
+        }
+        finally
+        {
+            _slowLoading = false;
+        }
+    }
+    private List<Target>? _libraries;
+    private long _librariesRun;
+
+    /// <summary>Libraries of the run (from its settings snapshot), read once per run.</summary>
+    private List<Target> Libraries()
+    {
+        if (_libraries is null || _librariesRun != RunId)
+            (_libraries, _librariesRun) = (RunConfigTargets(), RunId);
+        return _libraries;
+    }
+
+    private sealed record ListingState(string Text, double? Percent, bool Moving, string? Stage, TimeSpan? Eta);
+
+    /// <summary>
+    /// The inventory's progress. Graph delta never says how many items are left, so «processed N of N» would sit at
+    /// 100% for the whole listing. The total comes from SharePoint (the list's ItemCount, taken before each library is
+    /// listed); without it (an update with changes only, a folder of a library) the bar only shows that work goes on.
+    /// </summary>
+    private ListingState Listing(RunStatus s, IReadOnlyList<StateStore.TargetProgress> targets)
+    {
+        var libs = Libraries();
+        string Name(int i) => i < libs.Count ? $"«{libs[i].Library}{(string.IsNullOrEmpty(libs[i].Folder) ? "" : " / " + libs[i].Folder!.Trim('/'))}»" : $"{i + 1}";
+        bool running = s.Active && !s.Paused;
+        bool listed = targets.All(t => t.Done);
+        bool finished = s.Run.Status is RunStatuses.Completed or RunStatuses.CompletedWithErrors;
+        long files = targets.Sum(t => t.Files);
+        if (finished || (listed && targets[0].Checkouts != CheckoutScan.Pending))
+            return new(T($"Listing finished: <b>{Ui.N(files)}</b> files found, libraries: {targets.Count}"), 100, false, null, null);
+
+        var current = targets.FirstOrDefault(t => !t.Done);
+        string stage;
+        if (current is null)
+            stage = T("Searching the source for files without a published version");
+        else
+        {
+            string what = current.Incremental ? T("update with changes only") : T("listing files and folders");
+            stage = T($"Library {current.Index + 1} of {targets.Count}: {Name(current.Index)} — {what}");
+        }
+        stage += s.Paused ? " " + T("(paused)") : !s.Active ? " " + T("(not running)") : "";
+        var open = targets.Where(t => !t.Done).ToList();
+        if (open.Count > 0 && open.All(t => t.Expected is > 0))
+        {
+            long seen = targets.Sum(t => t.Done ? t.Files + t.Folders : Math.Min(t.Files + t.Folders, t.Expected!.Value));
+            long total = targets.Sum(t => t.Done ? t.Files + t.Folders : t.Expected!.Value);
+            double pct = Math.Min(99.9, 100.0 * seen / Math.Max(1, total));
+            TimeSpan? eta = s.Live is { FilesPerMinute: > 0.1 } live && running ? TimeSpan.FromMinutes((total - seen) / live.FilesPerMinute) : null;
+            return new(T($"Looked through ≈ <b>{pct:0.0}%</b>: {Ui.N(seen)} of ≈ {Ui.N(total)} items (files and folders; the total is as SharePoint reports it) · <b>{Ui.N(files)}</b> files found"),
+                pct, false, stage, eta);
+        }
+        string why = open.Any(t => t.Incremental)
+            ? T("the update looks only at changes; how many there are is not known in advance")
+            : T("SharePoint does not report the total for this target");
+        return new(T($"<b>{Ui.N(files)}</b> files found · {why}"), null, running, stage, null);
+    }
+
+    /// <summary>Libraries of an inventory: the stage of each and what it found; a bar only where it means something.</summary>
+    private List<Breakdown.Row> LibraryRows()
+    {
+        var libs = Libraries();
+        var s = _status!;
+        bool finished = s.Run.Status is RunStatuses.Completed or RunStatuses.CompletedWithErrors;
+        var current = s.Targets?.FirstOrDefault(t => !t.Done);
+        return (s.Targets ?? []).Select(t =>
+        {
+            var row = ToTargetRow(new StateStore.Breakdown(t.Index.ToString(System.Globalization.CultureInfo.InvariantCulture), t.Files, t.Bytes, t.Files, t.Failed), libs);
+            string stage;
+            double? progress = null;
+            bool moving = false;
+            if (t.Done || finished)
+                stage = T("done");
+            else if (t == current)
+            {
+                progress = t.Percent;
+                moving = progress is null && s.Active && !s.Paused;
+                stage = t.Incremental ? T("changes only") : progress is { } p ? T($"listing ≈ {p:0.0}%") : T("listing");
+            }
+            else
+                stage = T("waiting");
+            return row with { Stage = stage, Progress = progress, Moving = moving, Folders = t.Folders };
+        }).ToList();
+    }
+
+    private List<Target> RunConfigTargets()
+    {
+        var run = Runs.Store.GetRun(RunId);
+        if (run is null)
+            return [];
+        try
+        {
+            return [.. RunConfig.Parse(run.ConfigSnapshot).Profile.Libraries()];
+        }
+        catch (ProfileException)
+        {
+            return [];
+        }
+    }
+
+    // A library is named by itself and its folder; the site goes on the second line, so a long address does not squeeze the numbers.
+    private static Breakdown.Row ToTargetRow(StateStore.Breakdown b, List<Target> targets)
+    {
+        if (!int.TryParse(b.Key, out int i) || i >= targets.Count)
+            return new(b.Key, b.Total, b.Bytes, b.Finished, b.Failed);
+        var t = targets[i];
+        string name = string.IsNullOrEmpty(t.Folder) ? t.Library ?? b.Key : $"{t.Library} / {t.Folder.Trim('/')}";
+        return new(name, b.Total, b.Bytes, b.Finished, b.Failed, t.SiteUrl?.TrimEnd('/'));
+    }
+
+    private static (double[] Times, IReadOnlyList<TimeChart.Series> Progress, IReadOnlyList<TimeChart.Series> Speed) Charts(StateStore store, long runId)
+    {
+        var points = store.GetMetrics(runId)
+            .Select(m => (m.At, Data: ParseMetrics(m.Json)))
+            .Where(m => m.Data is not null)
+            .Select(m => (m.At, Data: m.Data!))
+            .ToList();
+        var times = points.Select(p => p.At.ToUnixTimeMilliseconds() / 1000.0).ToArray();
+        // Speed between neighbouring snapshots, not the average since the start: a slowdown shows at once.
+        // A gap (the app was closed, the run paused) breaks the line instead of drawing a low average across it.
+        var rate = points.Select((p, i) =>
+        {
+            if (i == 0)
+                return (double?)null;
+            var prev = points[i - 1];
+            double minutes = (p.At - prev.At).TotalMinutes;
+            long delta = p.Data.Found - prev.Data.Found;
+            return minutes is > 0 and <= 5 && delta >= 0 ? Math.Round(delta / minutes, 1) : null;
+        }).ToArray();
+        // Errors from the stored attempts, not the in-memory counter: it went back to zero after a stop and continue,
+        // and it counted every failed try, so the line was far above the «Помилки» card.
+        var (failedAt, retriedAt) = store.ErrorTimeline(runId);
+        double?[] UpTo(IReadOnlyList<DateTimeOffset> events) => points.Select(p => (double?)CountUpTo(events, p.At)).ToArray();
+        TimeChart.Series[] progress =
+        [
+            new(store.GetRun(runId)?.Mode switch { RunModes.Apply => T("Moved"), RunModes.Cleanup => T("Folders checked"), _ => T("Found") }, "#5e35b1", points.Select(p => (double?)p.Data.Found).ToArray()),
+        ];
+        TimeChart.Series[] speed =
+        [
+            new(T("Files/min"), "#5e35b1", rate),
+            new(T("Files with an error"), "#d13438", UpTo(failedAt), "n"),
+            new(T("Retries"), "#8764b8", UpTo(retriedAt), "n"),
+            new("429/503", "#f7a000", points.Select(p => (double?)p.Data.Apps.Sum(a => a.Throttled429 + a.Throttled503)).ToArray(), "n"),
+        ];
+        return (times, progress, speed);
+    }
+
+    /// <summary>How many of the sorted <paramref name="events"/> happened by <paramref name="at"/>.</summary>
+    private static int CountUpTo(IReadOnlyList<DateTimeOffset> events, DateTimeOffset at)
+    {
+        int lo = 0, hi = events.Count;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) / 2;
+            if (events[mid] <= at)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    // A damaged snapshot must not break the dashboard: it is just left out of the charts.
+    private static MetricsSnapshot? ParseMetrics(string json)
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<MetricsSnapshot>(json, Profile.JsonOptions);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    private long Count(string status) => _status!.Counts.Where(c => c.Key == status || c.Key.StartsWith(status + ":", StringComparison.Ordinal)).Sum(c => c.Value);
+
+    private string BatchHint()
+    {
+        long partial = _waves.Sum(w => w.Partial), deferred = _waves.Sum(w => w.Deferred), failed = _waves.Sum(w => w.Failed), running = _waves.Sum(w => w.InProgress);
+        var parts = new List<string>();
+        if (running > 0)
+            parts.Add(T($"running {Ui.N(running)}"));
+        if (partial > 0)
+            parts.Add(T($"partial {Ui.N(partial)}"));
+        if (deferred > 0)
+            parts.Add(T($"deferred {Ui.N(deferred)}"));
+        if (failed > 0)
+            parts.Add(T($"with an error {Ui.N(failed)}"));
+        return parts.Count == 0 ? T("see the Batches tab") : string.Join(", ", parts);
+    }
+
+    private string ErrorsHint()
+    {
+        var byClass = _status!.Counts.Where(c => c.Key.StartsWith("failed:", StringComparison.Ordinal)).OrderByDescending(c => c.Value).ToList();
+        return byClass.Count == 0 ? T("no errors") : string.Join(", ", byClass.Select(c => $"{Ui.ErrorClass(c.Key[7..])}: {Ui.N(c.Value)}"));
+    }
+
+    private static string ThrottleHint(MetricsSnapshot live)
+    {
+        var paused = live.Apps.Where(a => a.PausedUntil is not null).Select(a => a.Name).ToList();
+        if (live.Apps.Any(a => a.Blocked))
+            return T("some apps are blocked");
+        string names = string.Join(", ", paused);
+        return paused.Count > 0 ? T($"throttling: paused {names}") : T("no throttling");
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

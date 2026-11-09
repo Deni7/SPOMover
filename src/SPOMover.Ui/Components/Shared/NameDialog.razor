@@ -1,0 +1,14 @@
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" Label="@T("Name")" @bind-Value="Value" Immediate="true" Required="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Cancel()">@T("Cancel")</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="string.IsNullOrWhiteSpace(Value)" OnClick="() => MudDialog.Close(DialogResult.Ok(Value!.Trim()))">OK</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public string? Value { get; set; }
+}

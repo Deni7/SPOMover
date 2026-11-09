@@ -1,0 +1,55 @@
+@* THR-8: load of every app of the pool and of the tenant budget. *@
+<MudPaper Class="pa-3 mb-2" Elevation="1">
+    <MudText Typo="Typo.subtitle1">@T("Load on SharePoint")</MudText>
+    <MudSimpleTable Dense="true">
+        <thead>
+            <tr>
+                <th>@T("App")</th><th>@T("RU budget per minute")</th><th>@T("RU in 24 h")</th><th>@T("RU total")</th><th>@T("Requests")</th>
+                <th>429</th><th>503</th><th>@T("Concurrency")</th><th>@T("State")</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var a in Metrics.Apps)
+            {
+                <tr>
+                    <td><b>@a.Name</b></td>
+                    <td style="min-width:160px">
+                        <MudProgressLinear Value="@(a.MinuteUtilization * 100)" Color="@(a.MinuteUtilization > 0.9 ? Color.Warning : Color.Primary)" />
+                        <MudText Typo="Typo.caption">@T($"{a.MinuteUtilization * 100:0}% of {a.MinuteCapacity:0}")</MudText>
+                    </td>
+                    <td>@Ui.N(a.RuLast24h)</td>
+                    <td>@Ui.N(a.RuSpent)</td>
+                    <td>@Ui.N(a.Requests)</td>
+                    <td>@Ui.N(a.Throttled429)</td>
+                    <td>@Ui.N(a.Throttled503)</td>
+                    <td>@a.ConcurrencyLimit</td>
+                    <td>
+                        @if (a.Blocked)
+                        {
+                            <MudChip T="string" Color="Color.Error" Size="Size.Small">@T("possibly blocked")</MudChip>
+                        }
+                        else if (a.PausedUntil is { } until)
+                        {
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small">@T($"paused until {until.ToLocalTime():HH:mm:ss}")</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Color="Color.Success" Size="Size.Small">@T("working")</MudChip>
+                        }
+                    </td>
+                </tr>
+            }
+            <tr>
+                <td>@T("Tenant (ceiling of the pool)")</td>
+                <td><MudProgressLinear Value="@(Metrics.TenantUtilization * 100)" Color="@(Metrics.TenantUtilization > 0.9 ? Color.Warning : Color.Secondary)" />
+                    <MudText Typo="Typo.caption">@T($"{Metrics.TenantUtilization * 100:0}% of the 5-minute budget")</MudText></td>
+                <td colspan="2">@T($"{Ui.N(Metrics.TenantSpent)} RU total")</td>
+                <td colspan="6"></td>
+            </tr>
+        </tbody>
+    </MudSimpleTable>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public MetricsSnapshot Metrics { get; set; } = null!;
+}

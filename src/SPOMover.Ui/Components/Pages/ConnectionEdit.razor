@@ -1,0 +1,212 @@
+﻿@page "/connections/{Name}"
+@* GUI-26: tenant, client id, certificate from the Windows store, license tier (THR-2), connection test. *@
+@inject SettingsService Settings
+@inject RunService Runs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>@T($"Connection {Name}") — SPOMover</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+    <MudLink Href="connections">@T("← connections")</MudLink>
+    <MudText Typo="Typo.h5">@(IsNew ? T("New connection") : T($"Connection “{Name}”"))</MudText>
+    <HelpButton Section="3.1" />
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="Save">@T("Save")</MudButton>
+</MudStack>
+
+<MudGrid Spacing="2">
+    <MudItem xs="12" md="7">
+        <MudPaper Class="pa-3" Elevation="1">
+            @if (IsNew)
+            {
+                <MudTextField T="string" Label="@T("Name")" @bind-Value="_name" Required="true" Class="mb-2" />
+            }
+            <MudTextField T="string" Label="@T("Tenant (ID or domain)")" @bind-Value="_c.TenantId" Placeholder="contoso.onmicrosoft.com" Class="mb-2" />
+            <MudTextField T="string" Label="@T("App client ID")" @bind-Value="_c.ClientId" Placeholder="00000000-0000-0000-0000-000000000000" Class="mb-2" />
+            <MudSelect T="string" Label="@T("Authentication")" @bind-Value="_c.AuthMode" Class="mb-2">
+                <MudSelectItem Value="@("certificate")">@T("Certificate, app-only (recommended)")</MudSelectItem>
+                <MudSelectItem Value="@("deviceCode")">@T("User sign-in with a code (fallback)")</MudSelectItem>
+            </MudSelect>
+            @if (_c.AuthMode == "certificate")
+            {
+                <MudSelect T="string" Label="@T("Certificate from the Windows store")" Value="@SelectedCert" ValueChanged="PickCertificate" Clearable="true" Class="mb-2"
+                           HelperText="@T($"CurrentUser\\My of the account {CertificateCatalog.Account} and LocalMachine\\My. Only a certificate with a private key can be chosen.")">
+                    @foreach (var cert in _certs)
+                    {
+                        <MudSelectItem Value="@CertKey(cert.Store, cert.Thumbprint)" Disabled="@(!cert.HasPrivateKey || !cert.KeyAccessible)">@cert.Title · @T("until {0:d}", cert.NotAfter)@CertNote(cert) · @cert.Store</MudSelectItem>
+                    }
+                </MudSelect>
+                @if (CertWarning() is { } warning)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">@warning</MudAlert>
+                }
+                <MudTextField T="string" Label="@T("Thumbprint")" @bind-Value="_c.CertificateThumbprint" Class="mb-2 mono" />
+                <MudSelect T="string" Label="@T("Store")" @bind-Value="_c.CertificateStore" Class="mb-2">
+                    <MudSelectItem Value="@("CurrentUser")">CurrentUser\My</MudSelectItem>
+                    <MudSelectItem Value="@("LocalMachine")">LocalMachine\My</MudSelectItem>
+                </MudSelect>
+            }
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" md="5">
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudSelect T="LicenseTier" Label="@T("Licenses in the tenant (set the SharePoint limits)")" @bind-Value="_c.Licenses" Class="mb-2">
+                <MudSelectItem Value="LicenseTier.UpTo1000">@T("up to 1,000")</MudSelectItem>
+                <MudSelectItem Value="LicenseTier.UpTo5000">1 001 – 5 000</MudSelectItem>
+                <MudSelectItem Value="LicenseTier.UpTo15000">5 001 – 15 000</MudSelectItem>
+                <MudSelectItem Value="LicenseTier.UpTo50000">15 001 – 50 000</MudSelectItem>
+                <MudSelectItem Value="LicenseTier.Over50000">@T("over 50,000")</MudSelectItem>
+            </MudSelect>
+            @{ var l = _c.Limits(); }
+            <MudSimpleTable Dense="true" Class="mb-2">
+                <tbody>
+                    <tr><td>@T("App, RU/min")</td><td>@Ui.N(l.PerMinute)</td></tr>
+                    <tr><td>@T("App, RU/day")</td><td>@Ui.N(l.PerDay)</td></tr>
+                    <tr><td>@T("Tenant, RU per 5 min")</td><td>@Ui.N(l.TenantPer5Min)</td></tr>
+                </tbody>
+            </MudSimpleTable>
+            <MudText Typo="Typo.caption">@T("Manual override (empty — by the Microsoft table):")</MudText>
+            <MudNumericField T="int?" Label="@T("RU/min")" @bind-Value="_c.AppPerMinuteOverride" Min="1" Margin="Margin.Dense" />
+            <MudNumericField T="int?" Label="@T("RU/day")" @bind-Value="_c.AppPerDayOverride" Min="1" Margin="Margin.Dense" />
+            <MudNumericField T="int?" Label="@T("Tenant, RU per 5 min")" @bind-Value="_c.TenantPer5MinOverride" Min="1" Margin="Margin.Dense" />
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12">
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudText Typo="Typo.subtitle1">@T("Test the connection")</MudText>
+            <MudStack Row="true" AlignItems="AlignItems.End" Wrap="Wrap.Wrap">
+                <MudSelect T="string" Label="@T("Profile (check access to its targets)")" @bind-Value="_testProfile" Clearable="true" Style="min-width:280px">
+                    @foreach (var (p, _) in Settings.List(SettingKinds.Profile))
+                    {
+                        <MudSelectItem Value="@p">@p</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudButton Variant="Variant.Outlined" Disabled="IsNew || _testing" OnClick="Test" StartIcon="@Icons.Material.Filled.NetworkCheck">
+                    @(_testing ? T("Checking…") : T("Check"))
+                </MudButton>
+                @if (IsNew)
+                {
+                    <MudText Typo="Typo.caption">@T("Save the connection first.")</MudText>
+                }
+            </MudStack>
+            @foreach (var check in _checks)
+            {
+                <MudAlert Severity="@(check.Ok ? Severity.Success : Severity.Error)" Dense="true" Class="mt-2">@check.What: @check.Message</MudAlert>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@if (_issues is not null)
+{
+    <IssueList Issues="_issues" />
+}
+
+@code {
+    [Parameter] public string Name { get; set; } = string.Empty;
+
+    private bool IsNew => Name == "~new";
+    private Connection _c = new();
+    private string? _name;
+    private IReadOnlyList<CertificateCatalog.Entry> _certs = [];
+    private IReadOnlyList<ValidationIssue>? _issues;
+    private string? _testProfile;
+    private bool _testing;
+    private IReadOnlyList<RunService.ConnectionCheck> _checks = [];
+
+    protected override void OnParametersSet()
+    {
+        _c = IsNew ? new Connection() : Settings.GetConnection(Name) ?? new Connection { Name = Name };
+        _certs = CertificateCatalog.List();
+        _issues = null;
+        _checks = [];
+    }
+
+    private static string CertNote(CertificateCatalog.Entry cert) => CertProblem(cert) is { } problem ? $" ({problem})" : string.Empty;
+
+    private static string? CertProblem(CertificateCatalog.Entry cert) =>
+        !cert.HasPrivateKey ? T("no private key")
+        : !cert.KeyAccessible ? T("no access to the key")
+        : cert.Expired ? T("certificate expired")
+        : cert.NotYetValid ? T("valid from {0:d}", cert.NotBefore)
+        : null;
+
+    /// <summary>Explains why the entered thumbprint will not work, using what this process can see.</summary>
+    private string? CertWarning()
+    {
+        string? thumbprint = _c.CertificateThumbprint?.Replace(" ", string.Empty);
+        if (string.IsNullOrEmpty(thumbprint))
+            return null;
+        var matches = _certs.Where(c => string.Equals(c.Thumbprint, thumbprint, StringComparison.OrdinalIgnoreCase)).ToList();
+        var inStore = matches.FirstOrDefault(c => c.Store == (_c.CertificateStore ?? "CurrentUser"));
+        if (inStore is null)
+            return matches.Count > 0
+                ? T($"The certificate is in the {matches[0].Store}\\My store, but {_c.CertificateStore}\\My is selected.")
+                : T($"Certificate {thumbprint} not found. The app runs under the account {CertificateCatalog.Account} and sees only its CurrentUser\\My and LocalMachine\\My. If the certificate was created under another account, run the app under that account, or move the certificate to LocalMachine\\My and give this account access to the key.");
+        if (!inStore.HasPrivateKey)
+            return T($"The {inStore.Store}\\My store has only the public part of the certificate, without the private key — this happens when a .cer file was imported there. The key exists only where the certificate was created with New-SelfSignedCertificate, and it cannot be exported (NonExportable). Choose that instance of the certificate (another store, or run the app under the account that created it), or create a new certificate as the help describes (step 1) and add its .cer to the Entra app.");
+        if (!inStore.KeyAccessible)
+            return T($"The private key exists, but the account {CertificateCatalog.Account} has no access to it. Administrator: certlm.msc → Personal → Certificates → the certificate → All Tasks → Manage Private Keys → add this account with the Read permission.");
+        if (inStore.Expired)
+            return T("The certificate has expired ({0:d}).", inStore.NotAfter);
+        if (inStore.NotYetValid)
+            return T("The certificate is not valid yet (from {0:d}). Check the clock of this machine.", inStore.NotBefore);
+        return null;
+    }
+
+    // The same certificate may be in both stores (with the key in one of them only): an item is the pair store + thumbprint.
+    private static string CertKey(string? store, string? thumbprint) => $"{store ?? "CurrentUser"}|{thumbprint?.Replace(" ", string.Empty).ToUpperInvariant()}";
+
+    private string? SelectedCert => string.IsNullOrWhiteSpace(_c.CertificateThumbprint) ? null : CertKey(_c.CertificateStore, _c.CertificateThumbprint);
+
+    private void PickCertificate(string? key)
+    {
+        if (key is null)
+        {
+            _c.CertificateThumbprint = null;
+            return;
+        }
+        int bar = key.IndexOf('|');
+        _c.CertificateStore = key[..bar];
+        _c.CertificateThumbprint = key[(bar + 1)..];
+    }
+
+    private void Save()
+    {
+        string name = IsNew ? (_name ?? string.Empty).Trim() : Name;
+        try
+        {
+            if (IsNew && Settings.GetConnection(name) is not null)
+                throw new InvalidOperationException(T($"Connection “{name}” already exists."));
+            _c.CertificateThumbprint = _c.CertificateThumbprint?.Replace(" ", string.Empty).ToUpperInvariant();
+            _issues = Settings.Save(name, _c);
+            Snackbar.Add(T("Saved."), Severity.Success);
+            if (IsNew)
+                Nav.NavigateTo($"connections/{Uri.EscapeDataString(name)}");
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task Test()
+    {
+        _testing = true;
+        _checks = [];
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            _checks = await Runs.TestConnectionAsync(Name, _testProfile, cts.Token);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or OperationCanceledException or Spo.SpoException)
+        {
+            _checks = [new RunService.ConnectionCheck(T("connection check"), false, ex.Message)];
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+}

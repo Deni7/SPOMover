@@ -1,0 +1,73 @@
+@page "/runs/{Id:long}"
+@inject RunService Runs
+@inject NavigationManager Nav
+
+<PageTitle>@T($"Run {Id} — SPOMover")</PageTitle>
+
+@if (_run is null)
+{
+    <MudAlert Severity="Severity.Warning">@T($"Run {Id} not found.")</MudAlert>
+    return;
+}
+
+<MudTabs ActivePanelIndex="_tab" ActivePanelIndexChanged="TabChanged" Elevation="1" Rounded="true" PanelClass="pt-3" KeepPanelsAlive="false">
+    <MudTabPanel Text="@T("Overview")" Icon="@Icons.Material.Filled.Dashboard">
+        <RunDashboard RunId="Id" />
+    </MudTabPanel>
+    @if (_run.Mode == RunModes.Apply)
+    {
+        <MudTabPanel Text="@T("Batches")" Icon="@Icons.Material.Filled.Inventory2">
+            <BatchesTable RunId="Id" />
+        </MudTabPanel>
+    }
+    <MudTabPanel Text="@T("Files")" Icon="@Icons.Material.Filled.TableRows">
+        <FilesTable RunId="Id" />
+    </MudTabPanel>
+    <MudTabPanel Text="@T("Errors and attention")" Icon="@Icons.Material.Filled.ErrorOutline">
+        <ErrorsView RunId="Id" Scope="_scope" ScopeChanged="ScopeChanged" />
+    </MudTabPanel>
+    <MudTabPanel Text="@T("Run settings")" Icon="@Icons.Material.Filled.Settings">
+        @* GUI-9: the snapshot the run works with (CFG-8). *@
+        <MudText Typo="Typo.body2" Class="mb-2">@T("A snapshot of the profile and connections taken when the run was created. Changes to the profile after the start do not affect the run.")</MudText>
+        <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+            <pre class="mono" style="white-space:pre-wrap;margin:0">@_snapshot</pre>
+        </MudPaper>
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    [Parameter] public long Id { get; set; }
+    [SupplyParameterFromQuery(Name = "tab")] public string? Tab { get; set; }
+    [SupplyParameterFromQuery(Name = "show")] public string? Show { get; set; }
+
+    private string?[] TabNames => _run?.Mode == RunModes.Apply ? [null, "batches", "files", "errors", "settings"] : [null, "files", "errors", "settings"];
+
+    private RunRow? _run;
+    private string _snapshot = string.Empty;
+    private int _tab;
+    private StateStore.ErrorScope _scope;
+
+    protected override void OnParametersSet()
+    {
+        _run = Runs.Store.GetRun(Id);
+        _snapshot = _run is null ? string.Empty : RunConfig.Parse(_run.ConfigSnapshot).ToJson();
+        _tab = Math.Max(0, Array.IndexOf(TabNames, Tab));
+        _scope = Show switch { "failed" => StateStore.ErrorScope.Failed, "attention" => StateStore.ErrorScope.Attention, _ => StateStore.ErrorScope.All };
+    }
+
+    // The tab and the filter of the errors tab are kept in the address, so a link from a card always opens what it says.
+    private void TabChanged(int tab)
+    {
+        _tab = tab;
+        Navigate(TabNames[tab], TabNames[tab] == "errors" ? Show : null);
+    }
+
+    private void ScopeChanged(StateStore.ErrorScope scope)
+    {
+        _scope = scope;
+        Navigate("errors", scope switch { StateStore.ErrorScope.Failed => "failed", StateStore.ErrorScope.Attention => "attention", _ => null });
+    }
+
+    private void Navigate(string? tab, string? show) =>
+        Nav.NavigateTo(Nav.GetUriWithQueryParameters(new Dictionary<string, object?> { ["tab"] = tab, ["show"] = show }), replace: true);
+}

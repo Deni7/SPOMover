@@ -1,0 +1,126 @@
+@* GUI-7: failed, deferred and attention files grouped by status and message, with actions on a whole group. *@
+@inject RunService Runs
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<div class="d-flex align-center flex-wrap gap-2 mb-2">
+    <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined">
+        @foreach (var (scope, text) in Scopes)
+        {
+            <MudButton Variant="@(scope == Scope ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" OnClick="() => ScopeChanged.InvokeAsync(scope)">@text</MudButton>
+        }
+    </MudButtonGroup>
+    <MudSpacer />
+    <HelpButton Section="3.9" Text="@T("Error classes and what to do")" />
+</div>
+
+@if (_groups.Count == 0)
+{
+    <MudAlert Severity="Severity.Success">@Empty</MudAlert>
+    return;
+}
+
+<MudTable Items="_groups" Dense="true" Hover="true" T="StateStore.ErrorGroup">
+    <HeaderContent>
+        <MudTh>@T("File count")</MudTh><MudTh>@T("Status")</MudTh><MudTh>@T("Class")</MudTh><MudTh>@T("Message")</MudTh><MudTh>@T("What to do")</MudTh><MudTh></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd><b>@Ui.N(context.Count)</b></MudTd>
+        <MudTd><MudChip T="string" Size="Size.Small" Color="Ui.FileColor(context.Status)">@context.Status</MudChip></MudTd>
+        <MudTd>@Ui.ErrorClass(context.ErrorClass)</MudTd>
+        <MudTd><MudText Typo="Typo.body2" Class="wrap-anywhere">@(context.Error ?? "—")</MudText></MudTd>
+        <MudTd><MudText Typo="Typo.caption">@Recommend(context)</MudText></MudTd>
+        <MudTd Class="nowrap">
+            <MudTooltip Text="@T("Show the group’s files")">
+                <MudIconButton Icon="@Icons.Material.Filled.List" Size="Size.Small" OnClick="() => Toggle(context)" />
+            </MudTooltip>
+            <MudTooltip Text="@T("Ignore the group")">
+                <MudIconButton Icon="@Icons.Material.Filled.Block" Size="Size.Small" OnClick="() => Ignore(context)" />
+            </MudTooltip>
+        </MudTd>
+    </RowTemplate>
+    <ChildRowContent>
+        @if (_open == context)
+        {
+            <MudTr>
+                <td colspan="6">
+                    <MudList T="string" Dense="true">
+                        @foreach (var f in _openFiles)
+                        {
+                            <MudListItem T="string" OnClick="@(() => Nav.NavigateTo($"files/{f.Id}"))">
+                                <MudText Typo="Typo.body2" Class="wrap-anywhere">@f.Path · @T($"attempts {f.Attempts}")</MudText>
+                            </MudListItem>
+                        }
+                    </MudList>
+                    @if (context.Count > _openFiles.Count)
+                    {
+                        <MudText Typo="Typo.caption" Class="px-4">@T($"Showing {_openFiles.Count} of {Ui.N(context.Count)}; all of them are on the “Files” tab with a status filter.")</MudText>
+                    }
+                </td>
+            </MudTr>
+        }
+    </ChildRowContent>
+</MudTable>
+
+@code {
+    [Parameter, EditorRequired] public long RunId { get; set; }
+
+    /// <summary>Only failed files (the "Errors" card), only files that need attention (that card), or both with deferred ones.</summary>
+    [Parameter] public StateStore.ErrorScope Scope { get; set; }
+    [Parameter] public EventCallback<StateStore.ErrorScope> ScopeChanged { get; set; }
+
+    private static (StateStore.ErrorScope, string)[] Scopes =>
+        [(StateStore.ErrorScope.All, T("All")), (StateStore.ErrorScope.Failed, T("Errors")), (StateStore.ErrorScope.Attention, T("Need attention"))];
+
+    private string Empty => Scope switch
+    {
+        StateStore.ErrorScope.Failed => T("No errors."),
+        StateStore.ErrorScope.Attention => T("No files need attention."),
+        _ => T("No errors and no files that need attention."),
+    };
+
+    private IReadOnlyList<StateStore.ErrorGroup> _groups = [];
+    private StateStore.ErrorGroup? _open;
+    private List<FileRow> _openFiles = [];
+    private RunRow? _run;
+
+    protected override void OnParametersSet() => Load();
+
+    private void Load()
+    {
+        _run = Runs.Store.GetRun(RunId);
+        _groups = Runs.Store.GroupErrors(RunId, Scope);
+        if (_open is not null && !_groups.Contains(_open))
+            _open = null;
+    }
+
+    private string Recommend(StateStore.ErrorGroup g) =>
+        ReportExporter.Recommend(new FileRow { Status = g.Status, StatusCode = g.Status, ErrorClass = g.ErrorClass });
+
+    private void Toggle(StateStore.ErrorGroup g)
+    {
+        if (_open == g)
+        {
+            _open = null;
+            return;
+        }
+        _open = g;
+        var ids = Runs.Store.FileIdsOfGroup(RunId, g.Status, g.Error).Take(50).ToList();
+        _openFiles = Runs.Store.QueryFiles(RunId, new FileFilter { FileIds = ids }, 0, 50).ToList();
+    }
+
+    private async Task Ignore(StateStore.ErrorGroup g)
+    {
+        var dialog = await Dialogs.ShowAsync<CommentDialog>(T("Ignore the group"), new DialogParameters<CommentDialog>
+        {
+            { x => x.Text, T($"Files: {g.Count}. They will not be included in the next retries.") },
+        });
+        if (await dialog.Result is { Canceled: false, Data: string comment })
+        {
+            int n = Runs.Store.IgnoreMany(Runs.Store.FileIdsOfGroup(RunId, g.Status, g.Error), comment, DateTimeOffset.UtcNow);
+            Snackbar.Add(T($"Marked as ignored: {n}"), Severity.Info);
+            Load();
+        }
+    }
+}

@@ -1,0 +1,106 @@
+@* GUI-3: one folder of the source in the plan tree, its children loaded when it is opened. *@
+
+<div class="plan-node" style="padding-left:@(Depth * 18)px">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="plan-row">
+        @if (Node.HasChildren)
+        {
+            <MudIconButton Size="Size.Small" Icon="@(_open ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" OnClick="Toggle"
+                           aria-label="@(_open ? T("Collapse") : T("Expand"))" />
+        }
+        else
+        {
+            <span style="display:inline-block;width:34px"></span>
+        }
+        <MudIcon Icon="@Icons.Material.Outlined.Folder" Size="Size.Small" Color="@(Node.Fate is FolderFate.Batch or FolderFate.InBatch or FolderFate.Split ? Color.Primary : Color.Default)" />
+        <MudText Typo="Typo.body2" Class="plan-name"><b>@Node.Name</b></MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary nowrap">@T($"{Ui.N(Node.Files)} files · {Ui.Size(Node.Bytes)}")</MudText>
+        <MudChip T="string" Size="Size.Small" Color="@Color" Variant="Variant.Outlined">@Label</MudChip>
+        @if (Node.Batch is { } b && Node.Fate == FolderFate.Batch)
+        {
+            <MudText Typo="Typo.caption">→ @b.Library:/@b.TargetPath · @T($"{Ui.N(b.Items)} items")</MudText>
+        }
+        else if (Node.Fate == FolderFate.Split)
+        {
+            <MudText Typo="Typo.caption">→ @Node.Library:/@Node.Target @T("(to be created)")</MudText>
+        }
+        @if (Node.FileBatches.Count > 0)
+        {
+            <MudText Typo="Typo.caption">@(Node.FileBatches.Count > 1 ? T($"files: batches {FileBatchList}") : T($"files: batch {FileBatchList}"))</MudText>
+        }
+        @if (Node.RuleRow is { } row)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@T($"row {row}")</MudText>
+        }
+    </MudStack>
+</div>
+@if (_open)
+{
+    @foreach (var child in _children)
+    {
+        <PlanTreeNode View="View" Node="child" Depth="Depth + 1" />
+    }
+    @if (_more > 0)
+    {
+        <div style="padding-left:@((Depth + 1) * 18 + 34)px">
+            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ShowMore">@T($"{Ui.N(_more)} more folders…")</MudButton>
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public PlanView View { get; set; } = null!;
+    [Parameter, EditorRequired] public PlanFolderNode Node { get; set; } = null!;
+    [Parameter] public int Depth { get; set; }
+    [Parameter] public bool Open { get; set; }
+
+    private const int Page = 200;
+    private bool _open;
+    private List<PlanFolderNode> _all = [];
+    private List<PlanFolderNode> _children = [];
+    private int _more;
+
+    protected override void OnInitialized()
+    {
+        if (Open)
+            Toggle();
+    }
+
+    private void Toggle()
+    {
+        _open = !_open;
+        if (_open && _all.Count == 0)
+        {
+            _all = [.. View.Children(Node.Path)];
+            _children = _all.Take(Page).ToList();
+            _more = _all.Count - _children.Count;
+        }
+    }
+
+    private void ShowMore()
+    {
+        _children = _all.Take(_children.Count + Page).ToList();
+        _more = _all.Count - _children.Count;
+    }
+
+    private string Label => Node.Fate switch
+    {
+        FolderFate.Batch => T($"batch {Node.Batch!.Seq}: whole folder"),
+        FolderFate.InBatch => T($"in batch {Node.Batch!.Seq}"),
+        FolderFate.Split => T("split"),
+        FolderFate.Stays => T("stays"),
+        FolderFate.Partly => T("partly moving"),
+        _ => T("no rule"),
+    };
+
+    private string FileBatchList => string.Join(", ", Node.FileBatches.Select(f => f.Seq));
+
+    private Color Color => Node.Fate switch
+    {
+        FolderFate.Batch => Color.Success,
+        FolderFate.InBatch => Color.Default,
+        FolderFate.Split => Color.Info,
+        FolderFate.Partly => Color.Info,
+        FolderFate.Stays => Color.Secondary,
+        _ => Color.Warning,
+    };
+}

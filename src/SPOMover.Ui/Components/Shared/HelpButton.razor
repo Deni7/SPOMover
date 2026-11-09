@@ -1,0 +1,27 @@
+@* "?" next to a screen or a tab: the section of the user guide about these fields, in a window over the current page. *@
+@inject IDialogService Dialogs
+
+@if (Text is null)
+{
+    <MudTooltip Text="@T($"Help: {Title}")">
+        <MudIconButton Icon="@Icons.Material.Outlined.HelpOutline" Size="Size.Small" OnClick="Open" aria-label="@T("Help")" />
+    </MudTooltip>
+}
+else
+{
+    <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Outlined.HelpOutline" OnClick="Open">@Text</MudButton>
+}
+
+@code {
+    /// <summary>The guide section: its number ("3.16", "S1") or its id (heading anchor) in either language.</summary>
+    [Parameter, EditorRequired] public string Section { get; set; } = string.Empty;
+
+    /// <summary>Button text; none — only the icon.</summary>
+    [Parameter] public string? Text { get; set; }
+
+    private string Title => UserGuide.Instance.Resolve(Section)?.Title ?? T("user guide");
+
+    private Task Open() =>
+        Dialogs.ShowAsync<HelpDialog>(Title, new DialogParameters<HelpDialog> { { x => x.Section, Section } },
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true });
+}

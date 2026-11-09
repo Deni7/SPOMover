@@ -1,0 +1,34 @@
+<MudItem xs="6" sm="4" md="3" lg="2">
+    @if (Href is null)
+    {
+        <MudPaper Class="pa-3" Elevation="1" Style="height:100%">
+            @Body
+        </MudPaper>
+    }
+    else
+    {
+        @* The whole card is the link, not only the number. *@
+        <a href="@Href" class="stat-card-link">
+            <MudPaper Class="pa-3 stat-card-clickable" Elevation="1" Style="height:100%">
+                @Body
+            </MudPaper>
+        </a>
+    }
+</MudItem>
+
+@code {
+    [Parameter] public string Title { get; set; } = string.Empty;
+    [Parameter] public string Value { get; set; } = string.Empty;
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public Color Color { get; set; } = Color.Default;
+    [Parameter] public string? Href { get; set; }
+
+    private RenderFragment Body => @<text>
+        <MudText Typo="Typo.caption">@Title</MudText>
+        <MudText Class="stat-value" Color="Color">@Value</MudText>
+        @if (Hint is { Length: > 0 })
+        {
+            <MudText Typo="Typo.caption" Class="d-block wrap-anywhere">@Hint</MudText>
+        }
+    </text>;
+}

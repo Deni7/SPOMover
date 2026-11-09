@@ -1,0 +1,27 @@
+<!--
+  MSI of the app. Built by installer\build.ps1, which first publishes the app and the CLI into PayloadDir;
+  not part of the solution, so a plain build of the solution does not need WiX.
+-->
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <Version Condition="'$(Version)' == ''">1.0.0</Version>
+    <OutputName>SPOMover-$(Version)-x64</OutputName>
+    <Platform>x64</Platform>
+    <Cultures>uk-UA</Cultures>
+    <!-- ICE60: native runtime libraries carry a version without a language; that is fine for them. -->
+    <SuppressIces>ICE60</SuppressIces>
+    <DefineConstants>PayloadDir=$(PayloadDir);Version=$(Version)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+  <Target Name="CheckPayload" BeforeTargets="Build">
+    <Error Condition="'$(PayloadDir)' == '' Or !Exists('$(PayloadDir)\SPOMover.exe')"
+           Text="Немає опублікованого застосунку в PayloadDir. Збирайте інсталятор через installer\build.ps1." />
+  </Target>
+
+</Project>

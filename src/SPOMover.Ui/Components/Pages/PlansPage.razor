@@ -1,0 +1,79 @@
+@page "/plans"
+@* GUI-3: where each profile stands — the last inventory, the last plan and the last move. *@
+@inject SettingsService Settings
+@inject RunService Runs
+
+<PageTitle>@T("Plan and move — SPOMover")</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+    <MudText Typo="Typo.h5">@T("Plan and move")</MudText>
+    <HelpButton Section="3.16" />
+</MudStack>
+<MudText Typo="Typo.body2" Class="mb-3">
+    @T("The order for each wave: inventory (full or changes only) → plan → review and approval → move → verification → rules for SPOReplaceLink.")
+</MudText>
+
+<MudTable T="Row" Items="_rows" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm">
+    <HeaderContent>
+        <MudTh>@T("Profile")</MudTh><MudTh>@T("Inventory")</MudTh><MudTh>@T("Plan")</MudTh><MudTh>@T("The move")</MudTh><MudTh></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd><MudLink Href="@($"profiles/{Uri.EscapeDataString(context.Profile)}")"><b>@context.Profile</b></MudLink></MudTd>
+        <MudTd>
+            @if (context.Inventory is { } inv)
+            {
+                <MudLink Href="@($"runs/{inv.Id}")">@T($"run {inv.Id}")</MudLink><span class="mud-text-secondary"> · @Ui.Time(inv.FinishedAt)</span>
+            }
+            else
+            {
+                <span class="mud-text-secondary">@T("none")</span>
+            }
+        </MudTd>
+        <MudTd>
+            @if (context.Plan is { } plan)
+            {
+                <span>@T($"plan {plan.Id} · {Ui.N(plan.Batches)} batches, {Ui.N(plan.Files)} files")</span>
+                @if (context.Inventory is { } i && i.Id != plan.RunId)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">@T("outdated")</MudChip>
+                }
+            }
+            else
+            {
+                <span class="mud-text-secondary">@T("none")</span>
+            }
+        </MudTd>
+        <MudTd>
+            @if (context.Apply is { } a)
+            {
+                <MudLink Href="@($"runs/{a.Id}")">@T($"run {a.Id}")</MudLink>
+                <MudChip T="string" Size="Size.Small" Color="@Ui.RunColor(a.Status)">@Ui.RunStatus(a.Status)</MudChip>
+            }
+            else
+            {
+                <span class="mud-text-secondary">@T("not yet")</span>
+            }
+        </MudTd>
+        <MudTd><MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.AccountTree" Href="@($"profiles/{Uri.EscapeDataString(context.Profile)}/plan")">@T("Plan…")</MudButton></MudTd>
+    </RowTemplate>
+    <NoRecordsContent>@T("No profiles yet. Create a profile in the “Profiles” section.")</NoRecordsContent>
+</MudTable>
+
+@code {
+    private sealed record Row(string Profile, RunRow? Inventory, StateStore.PlanRow? Plan, RunRow? Apply);
+
+    private List<Row> _rows = [];
+
+    protected override void OnInitialized()
+    {
+        var runs = Runs.Store.ListRuns(500);
+        foreach (var (name, _) in Settings.List(SettingKinds.Profile))
+        {
+            var profile = Settings.GetProfile(name);
+            var inventory = profile is null ? null : MappingCheck.LastInventory(Runs.Store, profile);
+            var plan = Runs.Store.ListPlans(name, 1).FirstOrDefault();
+            var apply = runs.FirstOrDefault(r => r.Mode == RunModes.Apply && string.Equals(r.ProfileName, name, StringComparison.OrdinalIgnoreCase));
+            _rows.Add(new Row(name, inventory, plan, apply));
+        }
+    }
+}

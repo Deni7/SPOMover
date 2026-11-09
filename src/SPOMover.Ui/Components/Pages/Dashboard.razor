@@ -1,0 +1,36 @@
+@page "/"
+@inject StatusService StatusService
+@inject IDialogService Dialogs
+@inject NavigationManager Nav
+
+<PageTitle>@T("Dashboard — SPOMover")</PageTitle>
+
+@if (_runId is long id)
+{
+    <RunDashboard RunId="id" />
+}
+else
+{
+    <MudPaper Class="pa-6" Elevation="1">
+        <MudText Typo="Typo.h5" Class="mb-2">@T("No runs yet")</MudText>
+        <MudText Class="mb-4">@T("First add a connection to SharePoint and a profile with libraries, then start an inventory.")</MudText>
+        <MudStack Row="true" Spacing="2">
+            <MudButton Href="connections" Variant="Variant.Outlined">@T("Connections")</MudButton>
+            <MudButton Href="profiles" Variant="Variant.Outlined">@T("Profiles")</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="NewRun">@T("New run")</MudButton>
+        </MudStack>
+    </MudPaper>
+}
+
+@code {
+    private long? _runId;
+
+    protected override void OnInitialized() => _runId = StatusService.CurrentRunId();
+
+    private async Task NewRun()
+    {
+        var dialog = await Dialogs.ShowAsync<NewRunDialog>(T("New run"), new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        if (await dialog.Result is { Canceled: false, Data: long id })
+            Nav.NavigateTo($"runs/{id}");
+    }
+}

@@ -1,0 +1,157 @@
+@* GUI-4: files of a run, paged on the server; filters, selection, ignore, export of the current view. *@
+@inject RunService Runs
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IFileSaver Saver
+
+<MudPaper Class="pa-3 mb-2" Elevation="1">
+    <MudGrid Spacing="2">
+        <MudItem xs="12" md="3">
+            <MudSelect T="string" Label="@T("Status")" MultiSelection="true" SelectedValues="_statuses" SelectedValuesChanged="v => Changed(() => _statuses = v)" Clearable="true" Dense="true"
+                       ToStringFunc="Ui.FileStatusFilter">
+                @foreach (var s in Ui.FileStatusFilters)
+                {
+                    <MudSelectItem Value="@s">@Ui.FileStatusFilter(s)</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="2">
+            <MudSelect T="string" Label="@T("Error class")" MultiSelection="true" SelectedValues="_classes" SelectedValuesChanged="v => Changed(() => _classes = v)" Clearable="true" Dense="true">
+                @foreach (var c in Ui.ErrorClasses)
+                {
+                    <MudSelectItem Value="@c">@Ui.ErrorClass(c)</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="6" md="2">
+            <MudSelect T="string" Label="@T("Format")" MultiSelection="true" SelectedValues="_ext" SelectedValuesChanged="v => Changed(() => _ext = v)" Clearable="true" Dense="true">
+                @foreach (var e in _extensions)
+                {
+                    <MudSelectItem Value="@e">@e</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="6" md="2">
+            <MudSelect T="int?" Label="@T("Library")" Value="_target" ValueChanged="v => Changed(() => _target = v)" Clearable="true" Dense="true">
+                @for (int i = 0; i < _targets.Count; i++)
+                {
+                    int index = i;
+                    <MudSelectItem T="int?" Value="index">@_targets[index]</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="3">
+            <MudTextField T="string" Label="@T("Search by path")" Value="_search" ValueChanged="v => Changed(() => _search = v)" DebounceInterval="400"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" Margin="Margin.Dense" />
+        </MudItem>
+    </MudGrid>
+    <MudStack Row="true" Spacing="1" Class="mt-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+        <MudText Typo="Typo.body2">@T($"Selected: {_selected.Count}")</MudText>
+        <MudButton Size="Size.Small" Variant="Variant.Outlined" Disabled="_selected.Count == 0" StartIcon="@Icons.Material.Filled.Block" OnClick="IgnoreSelected">@T("Ignore selected")</MudButton>
+        <HelpButton Section="3.8" Text="@T("Statuses")" />
+        <MudSpacer />
+        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => Export("csv"))" StartIcon="@Icons.Material.Filled.Download">CSV</MudButton>
+        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => Export("xlsx"))" StartIcon="@Icons.Material.Filled.Download">XLSX</MudButton>
+    </MudStack>
+</MudPaper>
+
+<MudTable T="FileRow" @ref="_table" ServerData="Load" Dense="true" Hover="true" MultiSelection="true" @bind-SelectedItems="_selected"
+          RowsPerPage="50" FixedHeader="true" Height="62vh" Breakpoint="Breakpoint.Sm" OnRowClick="Open" RowStyle="cursor:pointer">
+    <HeaderContent>
+        <MudTh><MudTableSortLabel T="FileRow" SortLabel="id" InitialDirection="SortDirection.Ascending">№</MudTableSortLabel></MudTh>
+        <MudTh Style="min-width:320px"><MudTableSortLabel T="FileRow" SortLabel="path">@T("Path")</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel T="FileRow" SortLabel="size">@T("Size")</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel T="FileRow" SortLabel="status">@T("Status")</MudTableSortLabel></MudTh>
+        <MudTh>@T("Modified")</MudTh>
+        <MudTh><MudTableSortLabel T="FileRow" SortLabel="attempts">@T("Attempts")</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel T="FileRow" SortLabel="error">@T("Error")</MudTableSortLabel></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Id</MudTd>
+        <MudTd Class="wrap-anywhere">@(context.Path ?? context.Name)</MudTd>
+        <MudTd Class="nowrap">@Ui.Size(context.Size)</MudTd>
+        <MudTd><MudChip T="string" Size="Size.Small" Color="Ui.FileColor(context.StatusCode)">@context.StatusCode</MudChip></MudTd>
+        <MudTd Class="nowrap">@Ui.Time(context.Modified)</MudTd>
+        <MudTd>@context.Attempts</MudTd>
+        <MudTd><MudText Typo="Typo.caption" Class="wrap-anywhere">@context.Error</MudText></MudTd>
+    </RowTemplate>
+    <NoRecordsContent>@T("No files match the filter.")</NoRecordsContent>
+    <PagerContent>
+        <MudTablePager PageSizeOptions="[25, 50, 100, 250]" RowsPerPageString="@T("Rows:")" InfoFormat="@T("{first_item}–{last_item} of {all_items}")" />
+    </PagerContent>
+</MudTable>
+
+@code {
+    [Parameter, EditorRequired] public long RunId { get; set; }
+    [Parameter] public IReadOnlyCollection<string>? InitialStatuses { get; set; }
+
+    private MudTable<FileRow>? _table;
+    private IEnumerable<string> _statuses = [];
+    private IEnumerable<string> _classes = [];
+    private IEnumerable<string> _ext = [];
+    private int? _target;
+    private string? _search;
+    private HashSet<FileRow> _selected = [];
+    private List<string> _targets = [];
+    private List<string> _extensions = [];
+
+    protected override void OnInitialized()
+    {
+        if (InitialStatuses is { Count: > 0 })
+            _statuses = InitialStatuses;
+        if (Runs.Store.GetRun(RunId) is { } run)
+            _targets = RunConfig.Parse(run.ConfigSnapshot).Profile.Libraries().Select((t, i) => i == 0 ? T($"{t.Library} (source)") : t.Library ?? string.Empty).ToList();
+        // The most common formats of this run; a library holds any kind of file.
+        _extensions = Runs.Store.BreakdownBy(RunId, "ext").Where(b => b.Key.Length > 0).Take(30).Select(b => b.Key).ToList();
+    }
+
+    private FileFilter Filter() => new()
+    {
+        Statuses = [.. _statuses],
+        ErrorClasses = [.. _classes],
+        Extensions = [.. _ext],
+        TargetIndex = _target,
+        Search = string.IsNullOrWhiteSpace(_search) ? null : _search,
+    };
+
+    private Task<TableData<FileRow>> Load(TableState state, CancellationToken ct)
+    {
+        var filter = Filter();
+        var items = Runs.Store.QueryFiles(RunId, filter, state.Page * state.PageSize, state.PageSize, state.SortLabel,
+            state.SortDirection == SortDirection.Descending);
+        return Task.FromResult(new TableData<FileRow> { Items = items, TotalItems = (int)Math.Min(int.MaxValue, Runs.Store.CountFiles(RunId, filter)) });
+    }
+
+    private async Task Changed(Action set)
+    {
+        set();
+        _selected.Clear();
+        if (_table is not null)
+            await _table.ReloadServerData();
+    }
+
+    private void Open(TableRowClickEventArgs<FileRow> e) => Nav.NavigateTo($"files/{e.Item!.Id}");
+
+    /// <summary>Exactly the rows the current filter shows, all pages.</summary>
+    private Task Export(string format)
+    {
+        var filter = Filter();
+        return SaveFile.Run(Saver, Snackbar, $"run-{RunId}-files.{format}", s => Exports.WriteFiles(Runs.Store, RunId, filter, format, s));
+    }
+
+    private async Task IgnoreSelected()
+    {
+        var dialog = await Dialogs.ShowAsync<CommentDialog>(T("Ignore the files"), new DialogParameters<CommentDialog>
+        {
+            { x => x.Text, T($"Files: {_selected.Count}. They will not be included in the next retries and are counted separately.") },
+        });
+        if (await dialog.Result is { Canceled: false, Data: string comment })
+        {
+            int n = Runs.Store.IgnoreMany(_selected.Select(f => f.Id), comment, DateTimeOffset.UtcNow);
+            Snackbar.Add(T($"Marked as ignored: {n}"), Severity.Info);
+            _selected.Clear();
+            await _table!.ReloadServerData();
+        }
+    }
+}

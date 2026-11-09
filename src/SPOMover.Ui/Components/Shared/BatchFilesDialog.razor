@@ -1,0 +1,31 @@
+@* The files of a files batch of a plan, with their new paths. *@
+@inject RunService Runs
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">@(_files.Count > Shown ? T($"Batch {Seq}: {Ui.N(_files.Count)} files, showing the first {Shown}") : T($"Batch {Seq}: {Ui.N(_files.Count)} files"))</MudText>
+        <MudSimpleTable Dense="true" Style="max-height:60vh;overflow:auto">
+            <thead><tr><th>@T("File in the source")</th><th>@T("New path")</th><th>@T("Size")</th></tr></thead>
+            <tbody>
+                @foreach (var (_, f) in _files.Take(Shown))
+                {
+                    <tr><td class="wrap-anywhere">@f.Path</td><td class="wrap-anywhere">@f.NewPath</td><td class="nowrap">@Ui.Size(f.Size)</td></tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Close()">@T("Close")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public long PlanId { get; set; }
+    [Parameter] public int Seq { get; set; }
+
+    private const int Shown = 1000;
+    private IReadOnlyList<(int Seq, Core.Planning.PlanBatchFile File)> _files = [];
+
+    protected override void OnParametersSet() => _files = Runs.Store.GetPlanBatchFiles(PlanId, Seq);
+}

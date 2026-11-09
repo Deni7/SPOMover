@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!--
+      A Windows version in the target: the WPF BlazorWebView of .NET 10 draws through WebView2CompositionControl,
+      which needs the Windows SDK projection (Microsoft.Windows.SDK.NET); without it the window fails on start.
+    -->
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>SPOMover</AssemblyName>
+    <RootNamespace>SPOMover.Desktop</RootNamespace>
+    <StartupObject>SPOMover.Desktop.Program</StartupObject>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" Version="10.0.120" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SPOMover.Host\SPOMover.Host.csproj" />
+    <ProjectReference Include="..\SPOMover.Ui\SPOMover.Ui.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="app.ico" />
+    <!-- Windows Forms is used only for the tray icon; WPF types win by default. -->
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+</Project>

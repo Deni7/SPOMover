@@ -1,0 +1,176 @@
+@* GUI-2: the mapping as an editable table with MAP-4 validation while typing, import/export (MAP-6) and the path test (MAP-7). *@
+@using SPOMover.Core.Mapping
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject IFileSaver Saver
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2" Spacing="2">
+    <MudText Typo="Typo.body2">
+        @T("Rows:") <b>@Rows.Count(r => !Empty(r))</b> · @T("errors:") <b class="@(Errors > 0 ? "mud-error-text" : null)">@Errors</b> · @T("warnings:") <b>@(_issues.Count - Errors)</b>
+    </MudText>
+    <MudSpacer />
+    <MudFileUpload T="IBrowserFile" Accept=".csv,.txt,.tsv,.xlsx" FilesChanged="Import">
+        <ActivatorContent>
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Upload">@T("Import (CSV, XLSX)")</MudButton>
+        </ActivatorContent>
+    </MudFileUpload>
+    <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Download" OnClick="Export" Disabled="Rows.Count == 0">CSV</MudButton>
+    <MudTooltip Text="@T("A sample file for import: all kinds of rows with explanations, with the target libraries of this profile. Opens in Excel.")">
+        <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.Description" OnClick="Sample">@T("Sample CSV")</MudButton>
+    </MudTooltip>
+</MudStack>
+
+@if (Libraries.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">@T("Add target libraries on the “Libraries” tab first.")</MudAlert>
+}
+
+<MudTable Items="Rows" Dense="true" Hover="true" T="MappingEntry" Breakpoint="Breakpoint.Sm" Class="mb-2" FixedHeader="true" Height="@(Rows.Count > 15 ? "60vh" : null)">
+    <HeaderContent>
+        <MudTh Style="width:44px">@T("#")</MudTh>
+        <MudTh Style="width:34%">@T("Source (path in the source library)")</MudTh>
+        <MudTh Style="width:18%">@T("Library")</MudTh>
+        <MudTh Style="width:26%">@T("Path in the library")</MudTh>
+        <MudTh>@T("Comment")</MudTh>
+        <MudTh Style="width:40px"></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        @{ int row = Rows.IndexOf(context) + 1; var rowIssues = _issues.Where(i => i.Row == row).ToList(); }
+        <MudTd>@row</MudTd>
+        <MudTd>
+            <MudTextField T="string" Value="context.Source" ValueChanged="v => Set(() => context.Source = v)" Immediate="true" DebounceInterval="300"
+                          Placeholder="@T("Finance/2023 or /")" Error="@rowIssues.Any(i => i.Severity == IssueSeverity.Error)" Margin="Margin.Dense" />
+            @foreach (var i in rowIssues)
+            {
+                <MudText Typo="Typo.caption" Color="@(i.Severity == IssueSeverity.Error ? Color.Error : Color.Warning)" Class="d-block">@i.Message</MudText>
+            }
+        </MudTd>
+        <MudTd>
+            <MudSelect T="string" Value="context.Library" ValueChanged="v => Set(() => context.Library = v)" Margin="Margin.Dense" Dense="true">
+                @foreach (var l in Libraries)
+                {
+                    <MudSelectItem Value="@l">@l</MudSelectItem>
+                }
+                <MudSelectItem Value="@MappingEntry.Stay">@T("— keep in source")</MudSelectItem>
+                @if (context.Library is { Length: > 0 } other && other != MappingEntry.Stay && !Libraries.Contains(other, StringComparer.OrdinalIgnoreCase))
+                {
+                    <MudSelectItem Value="@other">@other (@T("not in the list"))</MudSelectItem>
+                }
+            </MudSelect>
+        </MudTd>
+        <MudTd>
+            <MudTextField T="string" Value="context.Path" ValueChanged="v => Set(() => context.Path = v)" Immediate="true" DebounceInterval="300"
+                          Placeholder="@(context.Library == MappingEntry.Stay ? "—" : T("same as in the source"))" Disabled="@(context.Library == MappingEntry.Stay)" Margin="Margin.Dense" />
+        </MudTd>
+        <MudTd><MudTextField T="string" @bind-Value="context.Comment" Margin="Margin.Dense" /></MudTd>
+        <MudTd>
+            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" OnClick="() => Set(() => Rows.Remove(context))" aria-label="@T("Delete row")" />
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>@T("The mapping is empty: all files stay in the source.")</NoRecordsContent>
+</MudTable>
+
+<MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" OnClick="Add">@T("Add row")</MudButton>
+
+@{ var general = _issues.Where(i => i.Row is null).ToList(); }
+@if (general.Count > 0)
+{
+    <IssueList Issues="general" ShowOk="false" />
+}
+
+<MudPaper Class="pa-3 mt-3" Outlined="true" Elevation="0">
+    <MudText Typo="Typo.subtitle2">@T("Where will a file or folder go")</MudText>
+    <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.End">
+        <MudTextField T="string" Label="@T("Path in the source library")" @bind-Value="_testPath" Style="min-width:420px" Margin="Margin.Dense" Immediate="true"
+                      OnKeyUp="@(e => { if (e.Key == "Enter") Test(); })" Placeholder="@T("Finance/2023/Report.xlsx")" />
+        <MudButton Variant="Variant.Outlined" OnClick="Test">@T("Check")</MudButton>
+    </MudStack>
+    @if (_testResult is { } r)
+    {
+        <MudText Class="mt-2" Typo="Typo.body2">@r</MudText>
+    }
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public List<MappingEntry> Rows { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> Libraries { get; set; } = [];
+    [Parameter] public string? SourceLibrary { get; set; }
+    [Parameter] public string FileName { get; set; } = "mapping";
+    /// <summary>Called after every change, so the page can update its counters.</summary>
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private IReadOnlyList<ValidationIssue> _issues = [];
+    private string? _testPath;
+    private string? _testResult;
+
+    private int Errors => _issues.Count(i => i.Severity == IssueSeverity.Error);
+
+    protected override void OnParametersSet() => Validate();
+
+    private void Validate() => _issues = MappingSet.Build(Rows, SourceLibrary, Libraries.ToList()).Issues;
+
+    private static bool Empty(MappingEntry e) => string.IsNullOrWhiteSpace(e.Source) && string.IsNullOrWhiteSpace(e.Library) && string.IsNullOrWhiteSpace(e.Path);
+
+    private async Task Set(Action change)
+    {
+        change();
+        Validate();
+        _testResult = null;
+        await Changed.InvokeAsync();
+    }
+
+    private Task Add() => Set(() => Rows.Add(new MappingEntry { Library = Libraries.FirstOrDefault() }));
+
+    private void Test()
+    {
+        if (string.IsNullOrWhiteSpace(_testPath))
+            return;
+        var set = MappingSet.Build(Rows, SourceLibrary, Libraries.ToList()).Set ?? MappingSet.Empty;
+        _testResult = set.Resolve(_testPath) switch
+        {
+            null => T("No row matches: stays in the source."),
+            { Stays: true } m => T($"Stays in the source (row {m.Rule.Row})."),
+            { } m => T($"→ {m.Library}:/{m.NewPath} (row {m.Rule.Row})"),
+        };
+    }
+
+    private async Task Import(IBrowserFile? file)
+    {
+        if (file is null)
+            return;
+        try
+        {
+            using var ms = new MemoryStream();
+            await file.OpenReadStream(50 * 1024 * 1024).CopyToAsync(ms);
+            ms.Position = 0;
+            var result = MappingImport.Parse(file.Name, ms);
+            bool replace = Rows.All(Empty)
+                || await Dialogs.ShowMessageBox(T("Mapping import"), T($"Rows found: {result.Entries.Count}. Replace the existing ones or add to them?"),
+                    yesText: T("Replace"), noText: T("Add"), cancelText: T("Cancel")) switch { true => true, false => false, null => throw new OperationCanceledException() };
+            await Set(() =>
+            {
+                if (replace)
+                    Rows.Clear();
+                Rows.RemoveAll(Empty);
+                Rows.AddRange(result.Entries);
+            });
+            Snackbar.Add(result.Warnings.Count > 0
+                    ? T($"Rows imported: {result.Entries.Count}; warnings: {result.Warnings.Count}. Save the profile.")
+                    : T($"Rows imported: {result.Entries.Count}. Save the profile."),
+                result.Entries.Count > 0 ? Severity.Success : Severity.Warning);
+            foreach (string w in result.Warnings.Take(5))
+                Snackbar.Add(w, Severity.Warning);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or System.Xml.XmlException)
+        {
+            Snackbar.Add(T($"File not read: {ex.Message}"), Severity.Error);
+        }
+    }
+
+    private Task Sample() => SaveFile.Bytes(Saver, Snackbar, "mapping-sample.csv", MappingSet.SampleCsv(Libraries));
+
+    private Task Export() => SaveFile.Bytes(Saver, Snackbar, $"{SaveFile.Name(FileName)}.mapping.csv", MappingSet.ToCsv(Rows.Where(r => !Empty(r))));
+}

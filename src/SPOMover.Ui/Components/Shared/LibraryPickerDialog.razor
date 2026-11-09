@@ -1,0 +1,68 @@
+@* Target libraries of the source site: picked from the site's list (needs access to the site) or typed by name. *@
+@inject SpoBrowser Browser
+@inject SettingsService Settings
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">@T("Site:") <b>@SiteUrl</b>. @T("Target libraries must be on this site and already exist.")</MudText>
+        @if (_busy)
+        {
+            <MudProgressLinear Indeterminate="true" Class="mb-2" />
+        }
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">@T($"The list of libraries was not received: {_error} You can type the names by hand.")</MudAlert>
+        }
+        @foreach (var d in _drives.Where(d => !string.Equals(d.Name, SourceLibrary, StringComparison.OrdinalIgnoreCase)))
+        {
+            <MudCheckBox T="bool" Value="_picked.Contains(d.Name)" ValueChanged="on => { if (on) _picked.Add(d.Name); else _picked.Remove(d.Name); }"
+                         Label="@($"{d.Name} — {Uri.UnescapeDataString(d.WebUrl)}")" Dense="true" />
+        }
+        <MudTextField T="string" Label="@T("Or library names (one per line)")" Lines="3" @bind-Value="_typed" Class="mt-2" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Cancel()">@T("Cancel")</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok">@T("Add")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public string SiteUrl { get; set; } = string.Empty;
+    [Parameter] public string? SourceLibrary { get; set; }
+    [Parameter] public string? Connection { get; set; }
+
+    private IReadOnlyList<Spo.Graph.SpoDrive> _drives = [];
+    private readonly HashSet<string> _picked = new(StringComparer.OrdinalIgnoreCase);
+    private string? _typed;
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        string? connection = Connection ?? Settings.List(SettingKinds.Connection).Select(c => c.Name).FirstOrDefault();
+        if (connection is null || string.IsNullOrWhiteSpace(SiteUrl))
+            return;
+        _busy = true;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            _drives = (await Browser.SiteAsync(connection, SiteUrl, cts.Token)).Drives;
+        }
+        catch (Exception ex) when (ex is Spo.SpoException or OperationCanceledException or KeyNotFoundException or UriFormatException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Ok()
+    {
+        var names = _picked.Concat((_typed ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        MudDialog.Close(DialogResult.Ok(names));
+    }
+}

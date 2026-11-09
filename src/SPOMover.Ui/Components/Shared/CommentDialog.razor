@@ -1,0 +1,17 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Class="mb-2">@Text</MudText>
+        <MudTextField T="string" Label="@T("Comment (why)")" @bind-Value="_comment" Lines="3" Required="true" Immediate="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Cancel()">@T("Cancel")</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="string.IsNullOrWhiteSpace(_comment)" OnClick="() => MudDialog.Close(DialogResult.Ok(_comment!.Trim()))">OK</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public string Text { get; set; } = string.Empty;
+
+    private string? _comment;
+}

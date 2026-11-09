@@ -1,0 +1,12 @@
+{
+  // An Entra app with Sites.Selected (Graph and SharePoint; write on the site) and a certificate.
+  // No secrets here: the certificate lives in the Windows certificate store, only its thumbprint is given.
+  "name": "spo-mover-1",
+  "tenantId": "contoso.onmicrosoft.com",
+  "clientId": "00000000-0000-0000-0000-000000000000",
+  "authMode": "certificate",
+  "certificateThumbprint": "0000000000000000000000000000000000000000",
+  "certificateStore": "CurrentUser",
+  // The tenant's license range sets the RU limits: upTo1000, upTo5000, upTo15000, upTo50000, over50000.
+  "licenses": "upTo1000"
+}

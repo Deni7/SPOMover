@@ -1,0 +1,74 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div @ref="_el" style="width:100%;min-height:@(Height + 40)px"></div>
+
+@code {
+    public sealed record Series(string Name, string Color, double?[] Values, string Axis = "y");
+
+    /// <summary>Charts with the same group share the time range: zoom and the period buttons act on all of them.</summary>
+    [Parameter, EditorRequired] public string Group { get; set; } = string.Empty;
+    /// <summary>Unix seconds of the points.</summary>
+    [Parameter, EditorRequired] public double[] Times { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<Series> Data { get; set; } = [];
+    [Parameter] public int Height { get; set; } = 240;
+
+    private ElementReference _el;
+    private IJSObjectReference? _module;
+    private IJSObjectReference? _chart;
+    private object? _shown;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (ReferenceEquals(_shown, Data))
+            return;
+        _shown = Data;
+        object[] data = [Times, .. Data.Select(s => s.Values)];
+        try
+        {
+            if (_chart is not null)
+            {
+                await _module!.InvokeVoidAsync("update", _chart, data); // keeps the zoom the user chose
+                return;
+            }
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/SPOMover.Ui/timechart.js");
+            if (_module is null)
+                return;
+            var axes = Data.Select(s => s.Axis).Distinct().ToArray();
+            _chart = await _module.InvokeAsync<IJSObjectReference>("create", _el,
+                new { group = Group, height = Height, axes, timeLabel = T("Time"), locale = Ui.Culture.Name, series =Data.Select(s => new { name = s.Name, color = s.Color, axis = s.Axis }) }, data);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    /// <summary>Shows the last <paramref name="period"/> of the run in every chart of the group; null — the whole run.</summary>
+    public async Task ShowLast(TimeSpan? period)
+    {
+        try
+        {
+            if (_module is not null)
+                await _module.InvokeVoidAsync("range", Group, (long)(period?.TotalSeconds ?? 0));
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_chart is not null && _module is not null)
+                await _module.InvokeVoidAsync("dispose", _chart);
+            if (_chart is not null)
+                await _chart.DisposeAsync();
+            if (_module is not null)
+                await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+}

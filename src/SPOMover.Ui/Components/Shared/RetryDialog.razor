@@ -1,0 +1,69 @@
+@* retry from the window: which failed or deferred files of an apply run to move again. *@
+@inject RunService Runs
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">
+            @T("First remove the cause: rename the file that is in the way in the target (conflict), ask for the locked one to be released. The batches of the chosen files go back to the queue, the run continues and tries only them.")
+        </MudText>
+        @if (_groups.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true">@T("No failed or deferred files.")</MudAlert>
+        }
+        @foreach (var g in _groups)
+        {
+            <MudCheckBox T="bool" Value="_chosen.Contains(g.Class)" ValueChanged="v => Toggle(g.Class, v)" Label="@T($"{Ui.ErrorClass(g.Class)} — {Ui.N(g.Count)} files")" Color="Color.Primary" />
+        }
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Cancel()">@T("Cancel")</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_chosen.Count == 0" OnClick="Retry">@T($"Retry ({Ui.N(ChosenCount)})")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter, EditorRequired] public long RunId { get; set; }
+
+    private List<(string Class, long Count)> _groups = [];
+    private readonly HashSet<string> _chosen = [];
+    private string? _error;
+
+    private long ChosenCount => _groups.Where(g => _chosen.Contains(g.Class)).Sum(g => g.Count);
+
+    protected override void OnParametersSet()
+    {
+        _groups = Runs.Store.QueryFiles(RunId, new FileFilter { Statuses = ["failed", FileStatuses.Deferred] }, 0, int.MaxValue)
+            .GroupBy(f => f.ErrorClass ?? (f.Status == FileStatuses.Deferred ? "locked" : "internal"))
+            .Select(g => (g.Key, (long)g.Count())).OrderByDescending(g => g.Item2).ToList();
+        // Classes the user can fix by hand are offered first; all are chosen except conflicts, which need a decision.
+        foreach (var g in _groups.Where(g => g.Class != "conflict"))
+            _chosen.Add(g.Class);
+    }
+
+    private void Toggle(string c, bool on)
+    {
+        if (on)
+            _chosen.Add(c);
+        else
+            _chosen.Remove(c);
+    }
+
+    private void Retry()
+    {
+        try
+        {
+            int n = Runs.Retry(RunId, [.. _chosen]);
+            Runs.Start(RunId);
+            MudDialog.Close(DialogResult.Ok(n));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+        {
+            _error = ex.Message;
+        }
+    }
+}

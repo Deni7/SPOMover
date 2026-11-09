@@ -1,0 +1,103 @@
+@page "/files/{Id:long}"
+@* GUI-4: metadata, attempts, link to the file in SharePoint. *@
+@inject RunService Runs
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+<PageTitle>@T($"File {Id} — SPOMover")</PageTitle>
+
+@if (_file is null)
+{
+    <MudAlert Severity="Severity.Warning">@T($"File {Id} not found.")</MudAlert>
+    return;
+}
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2">
+    <MudLink Href="@($"runs/{_file.RunId}?tab=files")">@T($"← run {_file.RunId}")</MudLink>
+    <MudText Typo="Typo.h6" Class="wrap-anywhere">@(_file.Path ?? _file.Name)</MudText>
+    <MudChip T="string" Color="Ui.FileColor(_file.StatusCode)">@_file.StatusCode</MudChip>
+    <HelpButton Section="3.7" />
+    <MudSpacer />
+    @if (_url is not null)
+    {
+        <MudButton Href="@_url" Target="_blank" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.OpenInNew">@T("Open in SharePoint")</MudButton>
+    }
+    @if (_file.Status != FileStatuses.Ignored && FileStatuses.IsFinal(_file.Status))
+    {
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Block" OnClick="Ignore">@T("Ignore")</MudButton>
+    }
+</MudStack>
+
+<MudGrid Spacing="2">
+    <MudItem xs="12" md="5">
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudSimpleTable Dense="true">
+                <tbody>
+                    <tr><td>@T("Size")</td><td>@Ui.Size(_file.Size)</td></tr>
+                    <tr><td>@T("Modified in SPO")</td><td>@Ui.Time(_file.Modified) @_file.ModifiedBy</td></tr>
+                    <tr><td>@T("Attempts")</td><td>@_file.Attempts</td></tr>
+                    <tr><td>@T("App")</td><td>@_file.App</td></tr>
+                    <tr><td>@T("Library")</td><td>@(_file.TargetIndex + 1)</td></tr>
+                    <tr><td>eTag</td><td class="mono">@_file.ETag</td></tr>
+                    <tr><td>@T("Error class")</td><td>@Ui.ErrorClass(_file.ErrorClass)</td></tr>
+                    <tr><td>@T("Message")</td><td class="wrap-anywhere">@_file.Error</td></tr>
+                    @if (_file.Comment is { } comment)
+                    {
+                        <tr><td>@T("Comment")</td><td>@comment</td></tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" md="7">
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudText Typo="Typo.subtitle1">@T("Attempt history")</MudText>
+            <MudSimpleTable Dense="true">
+                <thead><tr><th>@T("Time")</th><th>№</th><th>@T("Stage")</th><th>@T("Result")</th><th>HTTP</th><th>request-id</th><th>@T("App")</th></tr></thead>
+                <tbody>
+                    @foreach (var a in _attempts)
+                    {
+                        <tr>
+                            <td class="nowrap">@Ui.Time(a.At)</td><td>@a.Attempt</td><td>@a.Stage</td>
+                            <td class="wrap-anywhere">@(a.ErrorClass is null ? a.Message : $"{Ui.ErrorClass(a.ErrorClass)}: {a.Message}")</td>
+                            <td>@a.HttpStatus</td><td class="mono">@a.RequestId</td><td>@a.App</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter] public long Id { get; set; }
+
+    private FileRow? _file;
+    private IReadOnlyList<AttemptRow> _attempts = [];
+    private string? _url;
+
+    protected override void OnParametersSet() => Load();
+
+    private void Load()
+    {
+        _file = Runs.Store.GetFile(Id);
+        if (_file is null)
+            return;
+        _attempts = Runs.Store.GetAttempts(Id);
+        var target = Runs.Store.GetTargets(_file.RunId).FirstOrDefault(t => t.Index == _file.TargetIndex);
+        _url = target?.DriveUrl is { } drive && _file.Path is { } path
+            ? drive.TrimEnd('/') + "/" + string.Join('/', path.Split('/').Select(Uri.EscapeDataString))
+            : null;
+    }
+
+    private async Task Ignore()
+    {
+        var dialog = await Dialogs.ShowAsync<CommentDialog>(T("Ignore the file"), new DialogParameters<CommentDialog> { { x => x.Text, T("The file will not be included in the next retries.") } });
+        if (await dialog.Result is { Canceled: false, Data: string comment })
+        {
+            Runs.Store.Ignore(Id, comment, DateTimeOffset.UtcNow);
+            Snackbar.Add(T("Marked as ignored."), Severity.Info);
+            Load();
+        }
+    }
+}

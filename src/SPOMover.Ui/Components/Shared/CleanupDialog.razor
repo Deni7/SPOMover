@@ -1,0 +1,82 @@
+@* EXE-7 from the window: after a verified move, the source folders it emptied go to the site recycle bin. *@
+@inject RunService Runs
+
+<MudDialog>
+    <DialogContent>
+        @if (_preview is { } p)
+        {
+            @if (p.Blocker is { } blocker)
+            {
+                <MudAlert Severity="Severity.Info" Class="mb-2">@blocker</MudAlert>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    @((MarkupString)T($"After the move, the source still has the folders the files left. The app will check <b>{Ui.N(p.Folders)}</b> folders — only those above the moved files, within the mapping rules, from the deepest to the top — and delete to the <b>site recycle bin</b> only those that are empty at that moment. A folder where something remains (a file under a “keep in the source” rule, a conflict, a new file) stays: the status <code>skipped:notempty</code> shows it with what is in it."))
+                </MudText>
+                <MudSimpleTable Dense="true" Class="mb-2">
+                    <tbody>
+                        <tr><td>@T("Moved files confirmed by verification")</td><td>@Ui.N(p.Verified)</td></tr>
+                        <tr><td>@T("Folders to check")</td><td>@Ui.N(p.Folders)</td></tr>
+                    </tbody>
+                </MudSimpleTable>
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                    @T("Deleted folders can be restored from the site recycle bin (93 days). The library root and folders outside the mapping rules are not touched.")
+                </MudAlert>
+                <MudCheckBox T="bool" @bind-Value="_confirmed" Color="Color.Error" Label="@T("Delete the empty source folders")" />
+            }
+        }
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <HelpButton Section="3.19" Text="@T("Help")" />
+        <MudSpacer />
+        <MudButton OnClick="() => MudDialog.Cancel()">@T("Cancel")</MudButton>
+        @if (_preview is { Blocker: null })
+        {
+            <MudButton Color="Color.Error" Variant="Variant.Filled" Disabled="!_confirmed" OnClick="Start">@T("Delete empty")</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter, EditorRequired] public long RunId { get; set; }
+
+    private RunService.CleanupPreview? _preview;
+    private bool _confirmed;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _preview = await Task.Run(() => Runs.PreviewCleanup(RunId));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or ProfileException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void Start()
+    {
+        try
+        {
+            long id = Runs.CreateCleanupRun(RunId);
+            Runs.Start(id);
+            MudDialog.Close(DialogResult.Ok(id));
+        }
+        catch (RunValidationException ex)
+        {
+            _error = string.Join("; ", ex.Issues.Select(i => i.Message));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+        {
+            _error = ex.Message;
+        }
+    }
+}

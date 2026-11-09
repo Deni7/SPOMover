@@ -1,0 +1,352 @@
+@page "/profiles/{Name}/plan"
+@* GUI-3, PLN-1…PLN-5: build the plan of a profile, look at its waves, batches, source tree, folders to create,
+   conflicts and changes, export it, and start the move. *@
+@inject SettingsService Settings
+@inject RunService Runs
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject NavigationManager Nav
+@inject IFileSaver Saver
+
+<PageTitle>@T($"Plan {Name} — SPOMover")</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-3">
+    <MudLink Href="@($"profiles/{Uri.EscapeDataString(Name)}")">@T("← profile")</MudLink>
+    <MudText Typo="Typo.h5">@T($"Plan “{Name}”")</MudText>
+    <HelpButton Section="3.16" />
+    <MudSpacer />
+    @if (_plans.Count > 0)
+    {
+        <MudSelect T="long" Label="@T("Snapshot")" Value="_planId" ValueChanged="Select" Dense="true" Margin="Margin.Dense" Style="min-width:260px">
+            @foreach (var p in _plans)
+            {
+                <MudSelectItem Value="@p.Id">@T($"Plan {p.Id} · {Ui.Time(p.CreatedAt)} · {Ui.N(p.Batches)} batches")</MudSelectItem>
+            }
+        </MudSelect>
+    }
+    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="BuildAsync" Disabled="_busy">@T("Build plan")</MudButton>
+    <MudMenu Label="@T("Reports")" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" Dense="true" Disabled="_report is null || _busy">
+        @foreach (var (name, title) in Reports)
+        {
+            <MudMenuItem OnClick="@(() => Export(name, "csv"))">@title — CSV</MudMenuItem>
+            <MudMenuItem OnClick="@(() => Export(name, "xlsx"))">@title — XLSX</MudMenuItem>
+        }
+    </MudMenu>
+    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.FactCheck" OnClick="CheckTargets">@T("Check libraries…")</MudButton>
+    <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.DriveFileMove" OnClick="ApplyAsync"
+               Disabled="@(_report is null || _busy || _report.Plan.Batches == 0)">@T("Move…")</MudButton>
+</MudStack>
+
+@if (_busy)
+{
+    <MudProgressLinear Indeterminate="true" Class="mb-2" />
+    <MudText Typo="Typo.body2" Class="mb-2">@T("The plan is built from the inventory and the mapping; for a million files it takes up to a few minutes.")</MudText>
+}
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-3">@_error</MudAlert>
+}
+@if (_report is null && !_busy && _error is null)
+{
+    <MudAlert Severity="Severity.Info" Class="mb-3">@T("This profile has no plan yet. Click “Build plan”: it needs a completed inventory and a mapping without errors.")</MudAlert>
+}
+@if (_report is { } r)
+{
+    var p = r.Plan;
+    <MudText Typo="Typo.body2" Class="mb-2">
+        @T("Inventory:") <MudLink Href="@($"runs/{p.RunId}")">@T($"run {p.RunId}")</MudLink>@(InventoryDate).
+        @T("The mapping and the parameters are a snapshot of the profile at build time.")
+    </MudText>
+    @if (_newerInventory is { } newer)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">@T($"There is a newer inventory (run {newer}). The plan does not include it — build the plan again.")</MudAlert>
+    }
+    @foreach (var issue in _buildIssues)
+    {
+        <MudAlert Severity="@(issue.Severity == IssueSeverity.Error ? Severity.Error : Severity.Warning)" Dense="true" Class="mb-2">@issue.Message</MudAlert>
+    }
+    <MudGrid Spacing="2" Class="mb-2">
+        <StatCard Title="@T("Batch count")" Value="@Ui.N(p.Batches)" Hint="@T($"whole folders {Ui.N(r.FolderBatches)}, file sets {Ui.N(r.FilesBatches)}")" Color="Color.Primary" />
+        <StatCard Title="@T("To be moved")" Value="@Ui.N(p.Files)" Hint="@Ui.Size(p.Bytes)" />
+        <StatCard Title="@T("Staying")" Value="@Ui.N(p.StayFiles)" Hint="@Ui.Size(p.StayBytes)" />
+        <StatCard Title="@T("New folders")" Value="@Ui.N(p.Folders)" Hint="@T("in the target libraries")" />
+        <StatCard Title="@T("Conflicts")" Value="@Ui.N(p.Conflicts)" Hint="@T("not planned, they stay")" Color="@(p.Conflicts > 0 ? Color.Warning : Color.Success)" />
+        <StatCard Title="@T("Checked out")" Value="@Ui.N(r.CheckedOut)" Hint="@T("in batches")" Color="@(r.CheckedOut > 0 ? Color.Warning : Color.Default)" />
+        <StatCard Title="@T("Estimate")" Value="@Ui.Duration(r.Duration)" Hint="@T($"net time, {_parallel} batches at once")" />
+        <StatCard Title="@T("Largest batch")" Value="@Ui.N(r.LargestBatchItems)" Hint="@T("items (the limit is under 5,000)")" />
+    </MudGrid>
+    @if (r.Diff is { } d)
+    {
+        <MudAlert Severity="@(d.Same ? Severity.Success : Severity.Info)" Dense="true" Class="mb-2">
+            @if (d.Same)
+            {
+                <span>@T($"Compared with plan {d.PreviousPlanId}: the batches are the same.")</span>
+            }
+            else
+            {
+                <span>@T($"Compared with plan {d.PreviousPlanId}: batches added {Ui.N(d.Added)}, removed {Ui.N(d.Removed)}, changed {Ui.N(d.Changed)}; files {Ui.N(d.FilesBefore)} → {Ui.N(d.FilesAfter)} (“Changes” tab).")</span>
+            }
+        </MudAlert>
+    }
+
+    <MudTabs Elevation="1" Rounded="true" PanelClass="pa-3" @bind-ActivePanelIndex="_tab">
+        <MudTabPanel Text="@T("Waves")">
+            <MudSimpleTable Dense="true" Hover="true">
+                <thead><tr><th>@T("Wave")</th><th>@T("Mapping row")</th><th>@T("Batch count")</th><th>@T("File count")</th><th>@T("Total size")</th><th>@T("Estimate")</th></tr></thead>
+                <tbody>
+                    @foreach (var w in r.Waves)
+                    {
+                        <tr>
+                            <td>@w.Number</td>
+                            <td><MudLink OnClick="@(() => ShowWave(w.Number))">@w.Title</MudLink></td>
+                            <td>@Ui.N(w.Batches)</td><td>@Ui.N(w.Files)</td><td>@Ui.Size(w.Bytes)</td><td>@Ui.Duration(w.Duration)</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+            <MudText Typo="Typo.caption" Class="d-block mt-2">@T("A wave is a mapping row. The move goes wave by wave; within a wave, from the largest batches to the smallest.")</MudText>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@T($"Batches ({Ui.N(p.Batches)})")">
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2">
+                <MudSelect T="int" Label="@T("Wave")" Value="_wave" ValueChanged="w => { _wave = w; }" Dense="true" Margin="Margin.Dense" Style="max-width:260px">
+                    <MudSelectItem Value="0">@T("all")</MudSelectItem>
+                    @foreach (var w in r.Waves)
+                    {
+                        <MudSelectItem Value="@w.Number">@w.Number. @w.Title</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="string" Label="@T("Kind")" @bind-Value="_kind" Dense="true" Margin="Margin.Dense" Style="max-width:200px">
+                    <MudSelectItem Value="@("")">@T("all")</MudSelectItem>
+                    <MudSelectItem Value="@("folder")">@T("whole folder")</MudSelectItem>
+                    <MudSelectItem Value="@("files")">@T("file set")</MudSelectItem>
+                </MudSelect>
+                <MudTextField T="string" Label="@T("Search in paths")" @bind-Value="_search" Immediate="true" DebounceInterval="300" Margin="Margin.Dense" Clearable="true" Style="max-width:320px" />
+            </MudStack>
+            <MudTable T="Core.Planning.PlanBatch" Items="FilteredBatches" Dense="true" Hover="true" RowsPerPage="50" Breakpoint="Breakpoint.Sm">
+                <HeaderContent>
+                    <MudTh>№</MudTh><MudTh>@T("Wave")</MudTh><MudTh>@T("Kind")</MudTh><MudTh>@T("Source")</MudTh><MudTh>@T("Target")</MudTh><MudTh>@T("File count")</MudTh><MudTh>@T("Total size")</MudTh><MudTh>@T("Item count")</MudTh><MudTh>Check-out</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Seq</MudTd>
+                    <MudTd>@context.Wave</MudTd>
+                    <MudTd>
+                        @if (context.Kind == Core.Planning.BatchKind.Folder)
+                        {
+                            <span>@T("folder")</span>
+                        }
+                        else
+                        {
+                            <MudLink OnClick="@(() => ShowFiles(context.Seq))">@T("files")</MudLink>
+                        }
+                    </MudTd>
+                    <MudTd Class="wrap-anywhere">@Ui.Path(context.Source)</MudTd>
+                    <MudTd Class="wrap-anywhere">@context.Library:/@context.TargetPath</MudTd>
+                    <MudTd>@Ui.N(context.Files)</MudTd>
+                    <MudTd class="nowrap">@Ui.Size(context.Bytes)</MudTd>
+                    <MudTd>@Ui.N(context.Items)</MudTd>
+                    <MudTd>@(context.CheckedOut > 0 ? Ui.N(context.CheckedOut) : "")</MudTd>
+                </RowTemplate>
+                <NoRecordsContent>@T("No batches match these conditions.")</NoRecordsContent>
+                <PagerContent><MudTablePager RowsPerPageString="@T("Rows:")" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@T("Source tree")">
+            <MudText Typo="Typo.body2" Class="mb-2">
+                @((MarkupString)T("For each folder, what will happen to it: <b>whole folder</b> (one request), <b>split</b> (the folder is created in the target, its contents separately), <b>stays</b>, <b>no rule</b>."))
+            </MudText>
+            @if (_view is not null)
+            {
+                <MudPaper Outlined="true" Elevation="0" Class="pa-2" Style="max-height:70vh;overflow:auto">
+                    <PlanTreeNode @key="_view.Plan.Id" View="_view" Node="_view.Root" Open="true" />
+                </MudPaper>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="@T($"Folders to create ({Ui.N(p.Folders)})")">
+            <MudTable T="Core.Planning.PlanTargetFolder" Items="_folders" Dense="true" RowsPerPage="50">
+                <HeaderContent><MudTh>@T("Library")</MudTh><MudTh>@T("Folder")</MudTh></HeaderContent>
+                <RowTemplate><MudTd>@context.Library</MudTd><MudTd Class="wrap-anywhere">@context.Path</MudTd></RowTemplate>
+                <NoRecordsContent>@T("All the needed folders already exist in the target.")</NoRecordsContent>
+                <PagerContent><MudTablePager RowsPerPageString="@T("Rows:")" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@T($"Conflicts ({Ui.N(p.Conflicts)})")">
+            <MudTable T="Core.Planning.PlanConflict" Items="_conflicts" Dense="true" RowsPerPage="50">
+                <HeaderContent><MudTh>@T("File in the source")</MudTh><MudTh>@T("Library")</MudTh><MudTh>@T("New path")</MudTh><MudTh>@T("Reason")</MudTh></HeaderContent>
+                <RowTemplate>
+                    <MudTd Class="wrap-anywhere">@context.Path</MudTd><MudTd>@context.Library</MudTd><MudTd Class="wrap-anywhere">@context.NewPath</MudTd><MudTd>@context.Reason</MudTd>
+                </RowTemplate>
+                <NoRecordsContent>@T("No conflicts.")</NoRecordsContent>
+                <PagerContent><MudTablePager RowsPerPageString="@T("Rows:")" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@T("Changes")">
+            @if (r.Diff is { } diff)
+            {
+                <MudTable T="BatchChange" Items="diff.Changes" Dense="true" RowsPerPage="50">
+                    <HeaderContent><MudTh>@T("Change type")</MudTh><MudTh>@T("Kind")</MudTh><MudTh>@T("Source")</MudTh><MudTh>@T("Target")</MudTh><MudTh>@T("Files before")</MudTh><MudTh>@T("Files after")</MudTh></HeaderContent>
+                    <RowTemplate>
+                        <MudTd><MudChip T="string" Size="Size.Small" Color="@ChangeColor(context.Change)">@ChangeLabel(context.Change)</MudChip></MudTd>
+                        <MudTd>@(context.Kind == Core.Planning.BatchKind.Folder ? T("folder") : T("files"))</MudTd>
+                        <MudTd Class="wrap-anywhere">@Ui.Path(context.Source)</MudTd>
+                        <MudTd Class="wrap-anywhere">@context.Library:/@context.Target</MudTd>
+                        <MudTd>@Ui.N(context.FilesBefore)</MudTd><MudTd>@Ui.N(context.FilesAfter)</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>@T($"The batches are the same as in plan {diff.PreviousPlanId}.")</NoRecordsContent>
+                    <PagerContent><MudTablePager RowsPerPageString="@T("Rows:")" /></PagerContent>
+                </MudTable>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2">@T("This is the profile’s first plan: there is nothing to compare it with.")</MudText>
+            }
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@code {
+    [Parameter] public string Name { get; set; } = string.Empty;
+    [SupplyParameterFromQuery(Name = "plan")] public long? PlanQuery { get; set; }
+
+    private static (string, string)[] Reports =>
+    [
+        ("batches", T("Batches")), ("waves", T("Waves")), ("folders", T("Folders to create")), ("conflicts", T("Conflicts")), ("files", T("Files of file-set batches")), ("changes", T("Changes")),
+    ];
+
+    private string InventoryDate => _inventoryAt is { } at ? " " + T($"from {Ui.Time(at)}") : "";
+
+    private IReadOnlyList<StateStore.PlanRow> _plans = [];
+    private long _planId;
+    private PlanReport? _report;
+    private PlanView? _view;
+    private IReadOnlyList<Core.Planning.PlanTargetFolder> _folders = [];
+    private IReadOnlyList<Core.Planning.PlanConflict> _conflicts = [];
+    private IReadOnlyList<ValidationIssue> _buildIssues = [];
+    private DateTimeOffset? _inventoryAt;
+    private long? _newerInventory;
+    private int _parallel = 4;
+    private bool _busy;
+    private string? _error;
+    private int _tab;
+    private int _wave;
+    private string _kind = string.Empty;
+    private string? _search;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _plans = Runs.Store.ListPlans(Name);
+        long? id = PlanQuery is { } q && _plans.Any(p => p.Id == q) ? q : _plans.FirstOrDefault()?.Id;
+        if (id is { } planId)
+            await LoadAsync(planId);
+    }
+
+    private async Task Select(long id)
+    {
+        _buildIssues = [];
+        await LoadAsync(id);
+        Nav.NavigateTo(Nav.GetUriWithQueryParameter("plan", id), replace: true);
+    }
+
+    private async Task LoadAsync(long id)
+    {
+        _planId = id;
+        _busy = true;
+        try
+        {
+            var store = Runs.Store;
+            (_report, _view, _folders, _conflicts) = await Task.Run(() =>
+                (Planner.Report(store, id, _buildIssues), new PlanView(store, id), store.GetPlanFolders(id), store.GetPlanConflicts(id)));
+            _inventoryAt = store.GetRun(_report.Plan.RunId)?.FinishedAt;
+            var profile = Settings.GetProfile(Name);
+            _parallel = System.Text.Json.JsonSerializer.Deserialize<PlanOptions>(_report.Plan.OptionsJson, Profile.JsonOptions)?.Parallel ?? 4;
+            long? last = profile is null ? null : MappingCheck.LastInventory(store, profile)?.Id;
+            _newerInventory = last is { } l && l != _report.Plan.RunId && l > _report.Plan.RunId ? l : null;
+            _error = null;
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or ArgumentException or InvalidOperationException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task BuildAsync()
+    {
+        var profile = Settings.GetProfile(Name);
+        if (profile is null)
+        {
+            _error = T($"Profile “{Name}” not found.");
+            return;
+        }
+        _busy = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var store = Runs.Store;
+            var report = await Task.Run(() => Planner.Build(store, profile, DateTimeOffset.UtcNow));
+            _buildIssues = report.Issues;
+            _plans = store.ListPlans(Name);
+            Snackbar.Add(T($"Plan {report.Plan.Id} built: {Ui.N(report.Plan.Batches)} batches."), Severity.Success);
+            await LoadAsync(report.Plan.Id);
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("plan", report.Plan.Id), replace: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private IEnumerable<Core.Planning.PlanBatch> FilteredBatches =>
+        (_view?.Batches ?? []).Where(b => (_wave == 0 || b.Wave == _wave)
+            && (_kind.Length == 0 || (_kind == "folder") == (b.Kind == Core.Planning.BatchKind.Folder))
+            && (string.IsNullOrWhiteSpace(_search) || b.Source.Contains(_search, StringComparison.CurrentCultureIgnoreCase) || b.TargetPath.Contains(_search, StringComparison.CurrentCultureIgnoreCase)));
+
+    private void ShowWave(int wave)
+    {
+        _wave = wave;
+        _tab = 1;
+    }
+
+    private Task ShowFiles(int seq) =>
+        Dialogs.ShowAsync<BatchFilesDialog>(T($"Files of batch {seq}"), new DialogParameters<BatchFilesDialog> { { x => x.PlanId, _planId }, { x => x.Seq, seq } },
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+
+    private Task Export(string name, string format) =>
+        SaveFile.Run(Saver, Snackbar, Exports.PlanFileName(Name, _planId, name, format), s => Exports.WritePlanReport(Runs.Store, _planId, name, format, s));
+
+    private Task CheckTargets() =>
+        Dialogs.ShowAsync<TargetCheckDialog>(T("Checking the target libraries"), new DialogParameters<TargetCheckDialog> { { x => x.Profile, Name } },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+    private async Task ApplyAsync()
+    {
+        if (_report is null)
+            return;
+        var parameters = new DialogParameters<ApplyDialog>
+        {
+            { x => x.Profile, Name },
+            { x => x.Report, _report },
+            { x => x.Parallel, _parallel },
+            { x => x.InventoryAge, _inventoryAt is { } at ? DateTimeOffset.UtcNow - at : null },
+        };
+        var dialog = await Dialogs.ShowAsync<ApplyDialog>(T("Move the plan’s files?"), parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        if (await dialog.Result is { Canceled: false, Data: long id })
+            Nav.NavigateTo($"runs/{id}");
+    }
+
+    private static string ChangeLabel(string change) => change switch { "added" => T("added"), "removed" => T("removed"), _ => T("changed") };
+
+    private static Color ChangeColor(string change) => change switch { "added" => Color.Success, "removed" => Color.Error, _ => Color.Info };
+}

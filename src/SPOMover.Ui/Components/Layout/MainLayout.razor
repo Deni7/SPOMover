@@ -1,0 +1,62 @@
+﻿@inherits LayoutComponentBase
+
+<MudThemeProvider Theme="_theme" />
+<MudPopoverProvider />
+<MudDialogProvider CloseOnEscapeKey="true" />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1" Dense="true">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="() => _drawer = !_drawer" aria-label="@T("Menu")" />
+        <img src="_content/SPOMover.Ui/logo.svg" alt="" width="28" height="28" class="ml-2" style="display:block" />
+        <MudText Typo="Typo.h6" Class="ml-2">SPOMover</MudText>
+        <MudSpacer />
+        <MudText Typo="Typo.caption">@T("Splitting a SharePoint Online library into several libraries")</MudText>
+        <MudMenu Icon="@Icons.Material.Filled.Translate" Color="Color.Inherit" Dense="true" Class="ml-2" AriaLabel="@T("Language")" title="@T("Language")">
+            @foreach (var (code, name) in L.Languages)
+            {
+                <MudMenuItem OnClick="() => ChooseLanguage(code)" Icon="@(code == L.Language ? Icons.Material.Filled.Check : null)">@name</MudMenuItem>
+            }
+        </MudMenu>
+        <MudTooltip Text="@T("Help")">
+            <MudIconButton Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Inherit" Href="help" aria-label="@T("Help")" Class="ml-2" />
+        </MudTooltip>
+    </MudAppBar>
+    <MudDrawer @bind-Open="_drawer" ClipMode="DrawerClipMode.Always" Elevation="1" Variant="DrawerVariant.Responsive">
+        <MudNavMenu>
+            <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">@T("Dashboard")</MudNavLink>
+            <MudNavLink Href="runs" Icon="@Icons.Material.Filled.PlayCircle">@T("Runs")</MudNavLink>
+            <MudNavLink Href="plans" Icon="@Icons.Material.Filled.AccountTree">@T("Plan and move")</MudNavLink>
+            <MudDivider Class="my-2" />
+            <MudText Typo="Typo.overline" Class="px-4">@T("Settings")</MudText>
+            <MudNavLink Href="profiles" Icon="@Icons.Material.Filled.Tune">@T("Profiles")</MudNavLink>
+            <MudNavLink Href="connections" Icon="@Icons.Material.Filled.Key">@T("Connections")</MudNavLink>
+            <MudDivider Class="my-2" />
+            <MudNavLink Href="help" Icon="@Icons.Material.Filled.MenuBook">@T("Help")</MudNavLink>
+        </MudNavMenu>
+    </MudDrawer>
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="py-4">
+            @* The key changes with the language: the page is built again with the new text. *@
+            <div @key="L.Language">
+                @Body
+            </div>
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private bool _drawer = true;
+
+    private void ChooseLanguage(string code)
+    {
+        L.Choose(code);
+        StateHasChanged();
+    }
+
+    private readonly MudTheme _theme = new()
+    {
+        // Violet, as the tile of the icon: SPOMover must not look like SPOReplaceLink (blue) or a Microsoft 365 app.
+        PaletteLight = new PaletteLight { Primary = "#5e35b1", PrimaryDarken = "#4527a0", PrimaryLighten = "#7e57c2", AppbarBackground = "#5e35b1" },
+    };
+}

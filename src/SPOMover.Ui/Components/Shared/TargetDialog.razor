@@ -1,0 +1,167 @@
+@* GUI-17: site by URL (main way with Sites.Selected) or search, library from the site's list, folder from the folder tree. *@
+@inject SpoBrowser Browser
+@inject SettingsService Settings
+
+<MudDialog>
+    <DialogContent>
+        <MudSelect T="string" Label="@T("Connection for browsing")" @bind-Value="_connection" Class="mb-2">
+            @foreach (var (c, _) in Settings.List(SettingKinds.Connection))
+            {
+                <MudSelectItem Value="@c">@c</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudStack Row="true" AlignItems="AlignItems.End">
+            <MudTextField T="string" Label="@T("Site address")" @bind-Value="_target.SiteUrl" Placeholder="https://tenant.sharepoint.com/sites/fin" Style="flex:1" />
+            <MudButton Variant="Variant.Outlined" Disabled="_busy || _connection is null || string.IsNullOrWhiteSpace(_target.SiteUrl)" OnClick="LoadSite">@T("Open")</MudButton>
+        </MudStack>
+        <MudStack Row="true" AlignItems="AlignItems.End" Class="mt-1">
+            <MudTextField T="string" Label="@T("or search for a site by name")" @bind-Value="_query" Style="flex:1" Margin="Margin.Dense" />
+            <MudButton Variant="Variant.Text" Disabled="_busy || _connection is null || string.IsNullOrWhiteSpace(_query)" OnClick="Search">@T("Search")</MudButton>
+        </MudStack>
+        @if (_sites is { } sites)
+        {
+            @if (sites.Count == 0)
+            {
+                <MudText Typo="Typo.caption">@T("Nothing found. With the Sites.Selected permission the search is often empty — enter the site address.")</MudText>
+            }
+            <MudList T="string" Dense="true">
+                @foreach (var s in sites)
+                {
+                    <MudListItem T="string" OnClick="@(async () => { _target.SiteUrl = s.WebUrl; await LoadSite(); })">@s.WebUrl</MudListItem>
+                }
+            </MudList>
+        }
+
+        @if (_drives.Count > 0)
+        {
+            <MudSelect T="string" Label="@T("Library")" Value="_target.Library" ValueChanged="LibraryChanged" Class="mt-3">
+                @foreach (var d in _drives)
+                {
+                    <MudSelectItem Value="@d.Name">@d.Name — @Uri.UnescapeDataString(d.WebUrl)</MudSelectItem>
+                }
+            </MudSelect>
+        }
+        else
+        {
+            <MudTextField T="string" Label="@T("Library (name or URL)")" @bind-Value="_target.Library" Class="mt-3" Placeholder="Documents" />
+        }
+
+        @if (_drive is not null)
+        {
+            <MudPaper Outlined="true" Class="pa-2 mt-3" Elevation="0">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                    <MudText Typo="Typo.body2">@T("Folder:") <b>/@string.Join('/', _path.Select(p => p.Name))</b></MudText>
+                    <MudSpacer />
+                    @if (_path.Count > 0)
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="Up" StartIcon="@Icons.Material.Filled.ArrowUpward">@T("Up")</MudButton>
+                    }
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="UseFolder">@T("Use this folder")</MudButton>
+                </MudStack>
+                @if (_busy)
+                {
+                    <MudProgressLinear Indeterminate="true" />
+                }
+                <MudList T="string" Dense="true" Style="max-height:240px;overflow:auto">
+                    @foreach (var f in _folders)
+                    {
+                        <MudListItem T="string" Icon="@Icons.Material.Filled.Folder" OnClick="() => Enter(f)">@f.Name</MudListItem>
+                    }
+                </MudList>
+            </MudPaper>
+        }
+        <MudTextField T="string" Label="@T("Folder in the library (empty — the whole library)")" @bind-Value="_target.Folder" Class="mt-2" />
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Cancel()">@T("Cancel")</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="string.IsNullOrWhiteSpace(_target.SiteUrl) || string.IsNullOrWhiteSpace(_target.Library)"
+                   OnClick="() => MudDialog.Close(DialogResult.Ok(_target))">OK</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public Target? Value { get; set; }
+    [Parameter] public string? Connection { get; set; }
+
+    private Target _target = new();
+    private string? _connection;
+    private string? _query;
+    private IReadOnlyList<Spo.Graph.SpoSite>? _sites;
+    private IReadOnlyList<Spo.Graph.SpoDrive> _drives = [];
+    private Spo.Graph.SpoDrive? _drive;
+    private List<Spo.Graph.SpoItem> _path = [];
+    private IReadOnlyList<Spo.Graph.SpoItem> _folders = [];
+    private bool _busy;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        _target = Value is null ? new Target() : new Target { SiteUrl = Value.SiteUrl, Library = Value.Library, Folder = Value.Folder };
+        _connection = Connection ?? Settings.List(SettingKinds.Connection).Select(c => c.Name).FirstOrDefault();
+    }
+
+    private async Task Guard(Func<CancellationToken, Task> action)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+            await action(cts.Token);
+        }
+        catch (Exception ex) when (ex is Spo.SpoException or KeyNotFoundException or UriFormatException or OperationCanceledException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task Search() => Guard(async ct => _sites = await Browser.SearchSitesAsync(_connection!, _query!.Trim(), ct));
+
+    private Task LoadSite() => Guard(async ct =>
+    {
+        var (_, drives) = await Browser.SiteAsync(_connection!, _target.SiteUrl!.Trim(), ct);
+        _drives = drives;
+        _sites = null;
+        if (_target.Library is { } lib && drives.FirstOrDefault(d => string.Equals(d.Name, lib, StringComparison.OrdinalIgnoreCase)) is { } d0)
+            await OpenDrive(d0, ct);
+    });
+
+    private Task LibraryChanged(string name) => Guard(async ct =>
+    {
+        _target.Library = name;
+        _target.Folder = null;
+        if (_drives.FirstOrDefault(d => d.Name == name) is { } d)
+            await OpenDrive(d, ct);
+    });
+
+    private async Task OpenDrive(Spo.Graph.SpoDrive drive, CancellationToken ct)
+    {
+        _drive = drive;
+        _path = [];
+        _folders = await Browser.FoldersAsync(_connection!, drive.Id, null, ct);
+    }
+
+    private Task Enter(Spo.Graph.SpoItem folder) => Guard(async ct =>
+    {
+        _path.Add(folder);
+        _folders = await Browser.FoldersAsync(_connection!, _drive!.Id, folder.Id, ct);
+    });
+
+    private Task Up() => Guard(async ct =>
+    {
+        _path.RemoveAt(_path.Count - 1);
+        _folders = await Browser.FoldersAsync(_connection!, _drive!.Id, _path.Count == 0 ? null : _path[^1].Id, ct);
+    });
+
+    private void UseFolder() => _target.Folder = _path.Count == 0 ? null : string.Join('/', _path.Select(p => p.Name));
+}

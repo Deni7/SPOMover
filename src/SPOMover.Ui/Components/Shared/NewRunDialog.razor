@@ -1,0 +1,127 @@
+@* Profile and mode, one-off changes that are not saved to the profile, validation before the start. *@
+@inject RunService Runs
+@inject SettingsService Settings
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudSelect T="string" Label="@T("Profile")" Value="_profile" ValueChanged="ProfileChanged" Required="true">
+            @foreach (var (name, _) in Settings.List(SettingKinds.Profile))
+            {
+                <MudSelectItem Value="@name">@name</MudSelectItem>
+            }
+        </MudSelect>
+        <MudRadioGroup T="string" @bind-Value="_mode" Class="mt-3">
+            <MudRadio T="string" Value="RunModes.Inventory">@T("inventory — a list of all the files of the libraries, no changes in SharePoint")</MudRadio>
+        </MudRadioGroup>
+        @if (_estimate is not null)
+        {
+            <MudCheckBox T="bool" @bind-Value="_update" Color="Color.Primary" Class="mt-1"
+                         Label="@T($"Only changes since run {_estimate.RunId} (delta) — faster; libraries that were not in it are listed in full")" />
+        }
+        <MudText Typo="Typo.caption" Class="d-block">@T("The plan and the move are on the “Plan and move” page (the profile’s “Plan…” button).")</MudText>
+
+        @if (_run is not null)
+        {
+            <MudExpansionPanels Elevation="0" Class="mt-3">
+                <MudExpansionPanel Text="@(Changed ? T("One-off changes for this run (changed)") : T("One-off changes for this run"))">
+                    <MudText Typo="Typo.caption" Class="mb-2 d-block">@T("They apply only to this run and go into its settings snapshot; the profile does not change.")</MudText>
+                    <MudGrid Spacing="2">
+                        <MudItem xs="6" sm="3"><MudNumericField T="int" Label="@T("Requests at once")" Value="_run.Performance.Concurrency" ValueChanged="v => Edit(() => _run.Performance.Concurrency = v)" Min="1" Max="64" /></MudItem>
+                        <MudItem xs="6" sm="3"><MudNumericField T="int" Label="@T("RU budget, %")" Value="_run.Performance.BudgetPercent" ValueChanged="v => Edit(() => _run.Performance.BudgetPercent = v)" Min="1" Max="100" /></MudItem>
+                        <MudItem xs="12">
+                            <MudSwitch T="bool" Label="@T("Work only in windows")" Value="_run.Performance.OnlyInWindows" ValueChanged="v => Edit(() => _run.Performance.OnlyInWindows = v)" Color="Color.Primary" />
+                        </MudItem>
+                        @if (Changed)
+                        {
+                            <MudItem xs="12"><MudButton Size="Size.Small" Variant="Variant.Text" OnClick="Reset">@T("Reset to the profile")</MudButton></MudItem>
+                        }
+                    </MudGrid>
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+
+        @if (_validation is { } v)
+        {
+            <IssueList Issues="v.Issues" />
+            @if (v.IsValid && _estimate is { } e)
+            {
+                <MudAlert Severity="Severity.Info" Class="mt-2">
+                    @T($"Previous inventory (run {e.RunId}, {Ui.Time(e.At)}): files in the source {Ui.N(e.SourceFiles)}, size {Ui.Size(e.SourceBytes)}.")
+                </MudAlert>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <HelpButton Section="3.4" Text="@T("Help")" />
+        <MudSpacer />
+        <MudButton OnClick="() => MudDialog.Cancel()">@T("Cancel")</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(_validation?.IsValid != true)" OnClick="Start">@T("Start")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public string? Profile { get; set; }
+
+    private string? _profile;
+    private string _mode = RunModes.Inventory;
+    private bool _update;
+    private ProfileValidation? _validation;
+    private ProfileInsights.Estimate? _estimate;
+    private string? _savedJson;
+    private Core.Config.Profile? _run;
+
+    /// <summary>The settings for this run differ from the saved profile.</summary>
+    private bool Changed => _run is not null && _run.ToJson() != _savedJson;
+
+    private void Edit(Action change)
+    {
+        change();
+        _validation = Runs.ValidateProfile(_run!);
+        _estimate = ProfileInsights.For(Runs.Store, _run!);
+    }
+
+    private void Reset()
+    {
+        _run = Core.Config.Profile.Parse(_savedJson!);
+        _validation = Runs.ValidateProfile(_run);
+        _estimate = ProfileInsights.For(Runs.Store, _run);
+    }
+
+    protected override void OnInitialized()
+    {
+        if (Profile is not null)
+            ProfileChanged(Profile);
+    }
+
+    private void ProfileChanged(string name)
+    {
+        _profile = name;
+        var profile = Settings.GetProfile(name);
+        if (profile is null)
+            return;
+        _savedJson = profile.ToJson();
+        _run = Core.Config.Profile.Parse(_savedJson);
+        _validation = Runs.ValidateProfile(profile);
+        _estimate = ProfileInsights.For(Runs.Store, profile);
+    }
+
+    private void Start()
+    {
+        try
+        {
+            long id = Changed ? Runs.CreateRun(_mode, _profile, _run, _update && _estimate is not null) : Runs.CreateRun(_mode, _profile, update: _update && _estimate is not null);
+            Runs.Start(id);
+            MudDialog.Close(DialogResult.Ok(id));
+        }
+        catch (RunValidationException ex)
+        {
+            _validation = new ProfileValidation(ex.Issues);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or KeyNotFoundException or ProfileException)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+}

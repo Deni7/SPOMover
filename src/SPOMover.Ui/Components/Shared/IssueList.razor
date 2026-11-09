@@ -1,0 +1,24 @@
+@* CFG-6: validation messages; mapping issues carry the row number. *@
+@if (Issues.Count == 0)
+{
+    @if (ShowOk)
+    {
+        <MudAlert Severity="Severity.Success" Dense="true" Class="mt-2">@T("No errors.")</MudAlert>
+    }
+}
+else
+{
+    <MudStack Spacing="1" Class="mt-2">
+        @foreach (var i in Issues.OrderByDescending(i => i.Severity))
+        {
+            <MudAlert Severity="@(i.Severity == IssueSeverity.Error ? Severity.Error : Severity.Warning)" Dense="true">
+                @(i.Row is int r ? T($"Row {r}: ") : "")@i.Message
+            </MudAlert>
+        }
+    </MudStack>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<ValidationIssue> Issues { get; set; } = [];
+    [Parameter] public bool ShowOk { get; set; } = true;
+}

@@ -1,0 +1,99 @@
+@* Before a move: are the target libraries ready for the files (columns, content types, required check-out, approval, drafts)? *@
+@inject SpoBrowser Browser
+@inject SettingsService Settings
+@inject ISnackbar Snackbar
+@inject IFileSaver Saver
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+    <MudText Typo="Typo.subtitle2">@T("Target libraries")</MudText>
+    @if (_busy)
+    {
+        <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+        <MudText Typo="Typo.caption">@T("checking columns, content types and settings…")</MudText>
+    }
+    <MudSpacer />
+    @if (_report is { Findings.Count: > 0 })
+    {
+        <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Download" OnClick="Export">CSV</MudButton>
+    }
+    <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh" OnClick="CheckAsync" Disabled="_busy">@T("Check again")</MudButton>
+</MudStack>
+
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true">@T($"Not checked: {_error}")</MudAlert>
+}
+else if (_report is { } report)
+{
+    @if (report.Findings.Count == 0)
+    {
+        string libraries = string.Join(", ", report.Checked.Select(c => T($"“{c}”")));
+        <MudAlert Severity="Severity.Success" Dense="true" Class="target-check-ok">
+            @T($"The columns, content types and settings of {libraries} suit the files from the source.")
+        </MudAlert>
+    }
+    else
+    {
+        <MudAlert Severity="@(report.Ok ? Severity.Info : Severity.Warning)" Dense="true" Class="mb-1">
+            @(report.Ok ? T("Notes on the target libraries:") : T($"Warnings: {report.Warnings}. The move is possible, but some file data or their visibility will suffer — better fix the libraries before the move."))
+        </MudAlert>
+        <MudSimpleTable Dense="true" Class="target-check">
+            <tbody>
+                @foreach (var f in report.Findings)
+                {
+                    <tr>
+                        <td style="width:28px"><MudIcon Icon="@Icon(f.Severity)" Color="@Colour(f.Severity)" Size="Size.Small" /></td>
+                        <td class="nowrap"><b>@f.LibraryName</b></td>
+                        <td>@f.Message</td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public string Profile { get; set; } = string.Empty;
+
+    /// <summary>The latest result, for a parent that wants to know (null while checking or after an error).</summary>
+    [Parameter] public EventCallback<TargetCheckReport?> Checked { get; set; }
+
+    private TargetCheckReport? _report;
+    private string? _error;
+    private bool _busy;
+
+    protected override Task OnInitializedAsync() => CheckAsync();
+
+    private async Task CheckAsync()
+    {
+        _busy = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var profile = Settings.GetProfile(Profile) ?? throw new InvalidOperationException(T($"Profile “{Profile}” not found."));
+            _report = await Task.Run(() => Browser.CheckTargetsAsync(profile, CancellationToken.None));
+        }
+        catch (Exception ex) when (ex is SPOMover.Spo.SpoException or InvalidOperationException or KeyNotFoundException)
+        {
+            _report = null;
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+        await Checked.InvokeAsync(_report);
+    }
+
+    private Task Export() => SaveFile.Run(Saver, Snackbar, $"{SaveFile.Name(Profile)}-target-check.csv", s => ReportExporter.WriteCsv(s, TargetCheck.Rows(_report!)));
+
+    private static string Icon(string severity) => severity switch
+    {
+        "error" => Icons.Material.Filled.ErrorOutline,
+        "warning" => Icons.Material.Filled.WarningAmber,
+        _ => Icons.Material.Outlined.Info,
+    };
+
+    private static Color Colour(string severity) => severity switch { "error" => Color.Error, "warning" => Color.Warning, _ => Color.Info };
+}

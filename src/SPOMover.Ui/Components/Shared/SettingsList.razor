@@ -1,0 +1,139 @@
+﻿@* GUI-16: list of stored profiles / templates / connections with clone, delete, JSON import and export. *@
+@inject SettingsService Settings
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IFileSaver Saver
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3" Wrap="Wrap.Wrap">
+    <MudText Typo="Typo.h5">@Title</MudText>
+    @if (Help is not null)
+    {
+        <HelpButton Section="@Help" Text="@T("How to set up")" />
+    }
+    <MudSpacer />
+    <MudFileUpload T="IBrowserFile" Accept=".json" FilesChanged="Import">
+        <ActivatorContent>
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Upload">@T("Import JSON")</MudButton>
+        </ActivatorContent>
+    </MudFileUpload>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" Href="@($"{Route}/~new")">@T("Create")</MudButton>
+</MudStack>
+
+<MudTable Items="_items" Dense="true" Hover="true" T="(string Name, DateTimeOffset UpdatedAt)">
+    <HeaderContent>
+        <MudTh>@T("Name")</MudTh><MudTh>@T("Modified")</MudTh>
+        @if (Extra is not null)
+        {
+            <MudTh>@ExtraTitle</MudTh>
+        }
+        <MudTh></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd><MudLink Href="@($"{Route}/{Uri.EscapeDataString(context.Name)}")">@context.Name</MudLink></MudTd>
+        <MudTd>@Ui.Time(context.UpdatedAt)</MudTd>
+        @if (Extra is not null)
+        {
+            <MudTd>@Extra(context.Name)</MudTd>
+        }
+        <MudTd Class="nowrap" Style="text-align:right">
+            @if (RowActions is not null)
+            {
+                @RowActions(context.Name)
+            }
+            <MudTooltip Text="@T("Export JSON")"><MudIconButton Icon="@Icons.Material.Filled.Download" Size="Size.Small" OnClick="() => Export(context.Name)" /></MudTooltip>
+            <MudTooltip Text="@T("Rename")"><MudIconButton Icon="@Icons.Material.Filled.DriveFileRenameOutline" Size="Size.Small" OnClick="() => Rename(context.Name)" /></MudTooltip>
+            <MudTooltip Text="@T("Clone")"><MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" OnClick="() => Clone(context.Name)" /></MudTooltip>
+            <MudTooltip Text="@T("Delete")"><MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="() => Delete(context.Name)" /></MudTooltip>
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>@T("Nothing here yet.")</NoRecordsContent>
+</MudTable>
+
+@code {
+    [Parameter, EditorRequired] public string Kind { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Route { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter] public string? ExtraTitle { get; set; }
+    [Parameter] public Func<string, string>? Extra { get; set; }
+    [Parameter] public RenderFragment<string>? RowActions { get; set; }
+
+    /// <summary>Guide section on setting this kind up.</summary>
+    [Parameter] public string? Help { get; set; }
+
+    private IReadOnlyList<(string Name, DateTimeOffset UpdatedAt)> _items = [];
+
+    protected override void OnParametersSet() => _items = Settings.List(Kind);
+
+    private async Task Import(IBrowserFile? file)
+    {
+        if (file is null)
+            return;
+        try
+        {
+            using var reader = new StreamReader(file.OpenReadStream(5 * 1024 * 1024));
+            string json = await reader.ReadToEndAsync();
+            string name = System.Text.Json.Nodes.JsonNode.Parse(json, documentOptions: new() { CommentHandling = System.Text.Json.JsonCommentHandling.Skip, AllowTrailingCommas = true })?["name"]?.GetValue<string>()
+                ?? Path.GetFileNameWithoutExtension(file.Name).Split('.')[0];
+            if (Settings.GetJson(Kind, name) is not null
+                && await Dialogs.ShowMessageBox(T("Replace?"), T($"“{name}” already exists. Replace it with the imported one?"), yesText: T("Replace"), cancelText: T("Cancel")) != true)
+                return;
+            var issues = Settings.SaveJson(Kind, name, json);
+            int errors = issues.Count(i => i.Severity == IssueSeverity.Error);
+            Snackbar.Add(errors == 0 ? T($"Imported “{name}”.") : T($"Imported “{name}”, errors in the settings: {errors} — see the editor."), errors == 0 ? Severity.Success : Severity.Warning);
+            _items = Settings.List(Kind);
+        }
+        catch (Exception ex) when (ex is ProfileException or System.Text.Json.JsonException or ArgumentException or IOException)
+        {
+            Snackbar.Add(T($"Not imported: {ex.Message}"), Severity.Error);
+        }
+    }
+
+    private Task Export(string name) =>
+        SaveFile.Text(Saver, Snackbar, $"{SaveFile.Name(name)}.{Kind}.json", Settings.GetJson(Kind, name) ?? "{}");
+
+    private async Task Rename(string name)
+    {
+        var dialog = await Dialogs.ShowAsync<NameDialog>(T("Rename"), new DialogParameters<NameDialog> { { x => x.Value, name } });
+        if (await dialog.Result is not { Canceled: false, Data: string newName })
+            return;
+        try
+        {
+            var updated = Settings.Rename(Kind, name, newName);
+            string profiles = string.Join(", ", updated);
+            Snackbar.Add(updated.Count == 0 ? T($"Renamed to “{newName}”.") : T($"Renamed to “{newName}”; profiles updated: {profiles}."), Severity.Success);
+            _items = Settings.List(Kind);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or KeyNotFoundException)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task Clone(string name)
+    {
+        var dialog = await Dialogs.ShowAsync<NameDialog>(T("Clone"), new DialogParameters<NameDialog> { { x => x.Value, T($"{name} (copy)") } });
+        if (await dialog.Result is not { Canceled: false, Data: string newName })
+            return;
+        try
+        {
+            Settings.Clone(Kind, name, newName);
+            Nav.NavigateTo($"{Route}/{Uri.EscapeDataString(newName)}");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or KeyNotFoundException)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task Delete(string name)
+    {
+        var usedBy = Kind == SettingKinds.Profile ? [] : Settings.UsedBy(Kind, name);
+        string profiles = string.Join(", ", usedBy);
+        string text = usedBy.Count > 0 ? T($"Used in profiles: {profiles}. They will stop passing the check.") : T("This cannot be undone (the previous version stays in the change history).");
+        if (await Dialogs.ShowMessageBox(T($"Delete “{name}”?"), text, yesText: T("Delete"), cancelText: T("Cancel")) != true)
+            return;
+        Settings.Delete(Kind, name);
+        _items = Settings.List(Kind);
+    }
+}

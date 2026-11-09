@@ -1,0 +1,157 @@
+@page "/profiles/{Name}/coverage"
+@* MAP-5: the profile's mapping applied to its last inventory — what moves where, what stays, and the problems. *@
+@inject SettingsService Settings
+@inject RunService Runs
+@inject ISnackbar Snackbar
+@inject IFileSaver Saver
+
+<PageTitle>@T($"Mapping coverage {Name} — SPOMover")</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-3">
+    <MudLink Href="@($"profiles/{Uri.EscapeDataString(Name)}")">@T("← profile")</MudLink>
+    <MudText Typo="Typo.h5">@T($"Mapping coverage “{Name}”")</MudText>
+    <HelpButton Section="3.15" />
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh" OnClick="CheckAsync" Disabled="_busy">@T("Check again")</MudButton>
+    <MudMenu Label="@T("Reports")" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" Dense="true" Disabled="_report is null || _busy">
+        @foreach (var (name, title) in Reports)
+        {
+            <MudMenuItem OnClick="@(() => Export(name, "csv"))">@title — CSV</MudMenuItem>
+            <MudMenuItem OnClick="@(() => Export(name, "xlsx"))">@title — XLSX</MudMenuItem>
+        }
+    </MudMenu>
+</MudStack>
+
+@if (_busy)
+{
+    <MudProgressLinear Indeterminate="true" Class="mb-3" />
+    <MudText Typo="Typo.body2">@T("The mapping is applied to every file of the inventory; for a million files this takes up to a minute.")</MudText>
+}
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-3">@_error</MudAlert>
+}
+@if (_report is { } r)
+{
+    <MudText Typo="Typo.body2" Class="mb-2">
+        @T("Inventory:") <MudLink Href="@($"runs/{r.RunId}")">@T($"run {r.RunId}")</MudLink> @T($"from {Ui.Time(r.InventoryAt)} — files in the source {Ui.N(r.Files)}, {Ui.Size(r.Bytes)}.")
+        @T("The mapping is taken from the saved profile.")
+    </MudText>
+    <MudGrid Spacing="2" Class="mb-2">
+        <StatCard Title="@T("To be moved")" Value="@Ui.N(r.MovedFiles)" Hint="@Ui.Size(r.MovedBytes)" Color="Color.Primary" />
+        <StatCard Title="@T("Staying by the “-” rule")" Value="@Ui.N(r.StayFiles)" Hint="@Ui.Size(r.StayBytes)" />
+        <StatCard Title="@T("No rule (stays)")" Value="@Ui.N(r.UnmappedFiles)" Hint="@Ui.Size(r.UnmappedBytes)" Color="@(r.UnmappedFiles > 0 ? Color.Warning : Color.Success)" />
+        <StatCard Title="@T("Name conflicts")" Value="@Ui.N(r.Conflicts)" Hint="@T("in the target libraries")" Color="@(r.Conflicts > 0 ? Color.Error : Color.Success)" />
+        <StatCard Title="@T("Paths too long")" Value="@Ui.N(r.LongPaths)" Hint="@T($"over {MappingCheck.MaxPath} characters")" Color="@(r.LongPaths > 0 ? Color.Error : Color.Success)" />
+        <StatCard Title="@T("Checked out")" Value="@Ui.N(r.CheckedOutMoved)" Hint="@T("in the folders being moved")" Color="@(r.CheckedOutMoved > 0 ? Color.Warning : Color.Default)" />
+    </MudGrid>
+
+    <IssueList Issues="r.Issues.Where(i => i.Row is null).ToList()" />
+
+    <MudGrid Spacing="2" Class="mt-2">
+        <MudItem xs="12" md="5">
+            <MudPaper Class="pa-3" Elevation="1">
+                <MudText Typo="Typo.subtitle1">@T("By target library")</MudText>
+                <MudSimpleTable Dense="true">
+                    <thead><tr><th>@T("Library")</th><th>@T("File count")</th><th>@T("Total size")</th></tr></thead>
+                    <tbody>
+                        @foreach (var l in r.ByLibrary)
+                        {
+                            <tr>
+                                <td>@l.Library @(l.Inventoried ? "" : T("(not listed)"))</td>
+                                <td>@Ui.N(l.Files)</td>
+                                <td class="nowrap">@Ui.Size(l.Bytes)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            </MudPaper>
+            <MudPaper Class="pa-3 mt-2" Elevation="1">
+                <MudText Typo="Typo.subtitle1">@T("No rule: the largest folders")</MudText>
+                @if (r.UnmappedFolders.Count == 0)
+                {
+                    <MudText Typo="Typo.caption">@T("Every source file is covered by a mapping row.")</MudText>
+                }
+                else
+                {
+                    <MudSimpleTable Dense="true">
+                        <thead><tr><th>@T("Folder")</th><th>@T("File count")</th><th>@T("Total size")</th></tr></thead>
+                        <tbody>
+                            @foreach (var f in r.UnmappedFolders.Take(30))
+                            {
+                                <tr><td class="wrap-anywhere">@f.Path</td><td>@Ui.N(f.Files)</td><td class="nowrap">@Ui.Size(f.Bytes)</td></tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="7">
+            <MudPaper Class="pa-3" Elevation="1">
+                <MudText Typo="Typo.subtitle1">@T("Rows of the mapping")</MudText>
+                <MudTable Items="r.Rules" Dense="true" Hover="true" T="RuleCoverage" FixedHeader="true" Height="@(r.Rules.Count > 15 ? "60vh" : null)">
+                    <HeaderContent>
+                        <MudTh>№</MudTh><MudTh>@T("Source")</MudTh><MudTh>@T("Target")</MudTh><MudTh>@T("File count")</MudTh><MudTh>@T("Total size")</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.Rule.Row</MudTd>
+                        <MudTd Class="wrap-anywhere">@(context.Rule.Source.Length == 0 ? "/" : context.Rule.Source)
+                            @foreach (var i in r.Issues.Where(i => i.Row == context.Rule.Row))
+                            {
+                                <MudText Typo="Typo.caption" Color="@(i.Severity == IssueSeverity.Error ? Color.Error : Color.Warning)" Class="d-block">@i.Message</MudText>
+                            }
+                        </MudTd>
+                        <MudTd Class="wrap-anywhere">@(context.Rule.Stays ? T("keep in the source") : $"{context.Rule.Library}:/{context.Rule.TargetPath}")</MudTd>
+                        <MudTd>@Ui.N(context.Files)</MudTd>
+                        <MudTd Class="nowrap">@Ui.Size(context.Bytes)</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>@T("The mapping is empty.")</NoRecordsContent>
+                </MudTable>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    [Parameter] public string Name { get; set; } = string.Empty;
+
+    private static (string, string)[] Reports =>
+    [
+        ("coverage", T("Rows of the mapping")), ("unmapped", T("No rule")), ("problems", T("Problems")), ("preview", T("Where each file will go")),
+    ];
+
+    private MappingReport? _report;
+    private Profile? _profile;
+    private bool _busy;
+    private string? _error;
+
+    protected override Task OnParametersSetAsync() => CheckAsync();
+
+    private async Task CheckAsync()
+    {
+        _busy = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            _profile = Settings.GetProfile(Name) ?? throw new KeyNotFoundException(T($"Profile “{Name}” not found."));
+            var profile = _profile;
+            _report = await Task.Run(() => MappingCheck.Run(Runs.Store, profile));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or ProfileException)
+        {
+            _report = null;
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task Export(string name, string format)
+    {
+        var (profile, report) = (_profile!, _report!);
+        return SaveFile.Run(Saver, Snackbar, Exports.MappingFileName(Name, name, format), s => Exports.WriteMappingReport(Runs.Store, profile, report, name, format, s));
+    }
+}

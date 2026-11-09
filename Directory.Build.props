@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- Version of the app, the CLI and the installer (installer\build.ps1 reads it). -->
+    <Version>0.6.0</Version>
+  </PropertyGroup>
+
+  <!--
+    Release package (installer\build.ps1): every project of the graph is built for win-x64 with its own runtime,
+    so the folder carries its own .NET.
+  -->
+  <PropertyGroup Condition="'$(Packaging)' == 'true'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+</Project>

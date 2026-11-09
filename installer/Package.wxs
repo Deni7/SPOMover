@@ -1,0 +1,62 @@
+<!--
+  Per-machine install into Program Files with a Start menu shortcut. The app keeps its data in
+  %LOCALAPPDATA%\SPOMover, which the installer neither creates nor removes: profiles, connections and run state
+  stay after an uninstall or an upgrade.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="SPOMover"
+           Manufacturer="SPOMover"
+           Version="$(Version)"
+           UpgradeCode="c22974d0-4e51-47ca-bbae-dfe2cb65c6e0"
+           Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="Уже встановлено новішу версію SPOMover. Щоб поставити цю, спершу видаліть наявну." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="app.ico" SourceFile="..\src\SPOMover.Desktop\app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="app.ico" />
+
+    <!-- The window is WebView2: present in Windows 11 and in updated Windows 10. -->
+    <Property Id="WEBVIEW2">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Name="pv" Type="raw" Bitness="always32" />
+    </Property>
+    <Property Id="WEBVIEW2USER">
+      <RegistrySearch Root="HKCU" Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Name="pv" Type="raw" />
+    </Property>
+    <Launch Condition="Installed OR WEBVIEW2 OR WEBVIEW2USER"
+            Message="Не знайдено Microsoft Edge WebView2 Runtime — без нього вікно застосунку не відкриється. Встановіть його (https://go.microsoft.com/fwlink/p/?LinkId=2124703) і запустіть інсталятор ще раз." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="SPOMover" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="SPOMover">
+      <Component Directory="INSTALLFOLDER">
+        <File Id="MainExe" Source="$(PayloadDir)\SPOMover.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="SPOMover"
+                    Description="Розділення бібліотеки SharePoint Online на кілька бібліотек"
+                    WorkingDirectory="INSTALLFOLDER" Icon="app.ico" Advertise="yes" />
+        </File>
+      </Component>
+      <Files Directory="INSTALLFOLDER" Include="$(PayloadDir)\**">
+        <Exclude Files="$(PayloadDir)\SPOMover.exe" />
+      </Files>
+    </Feature>
+
+    <!-- Wizard: welcome, folder, install, finish with "launch"; there is no license to accept. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Запустити SPOMover" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#MainExe]" />
+    <CustomAction Id="LaunchApp" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixShellExec" Impersonate="yes" />
+    <UI>
+      <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="2" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+    </UI>
+  </Package>
+</Wix>

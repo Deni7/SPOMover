@@ -1,0 +1,164 @@
+@* GUI-1: start, pause, continue, stop; reports; delete. *@
+@inject RunService Runs
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject NavigationManager Nav
+@inject IFileSaver Saver
+
+@{
+    var run = Status.Run;
+    bool active = Status.Active;
+}
+<MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+    @if (active && !Status.Paused)
+    {
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Pause" OnClick="Pause">@T("Pause")</MudButton>
+    }
+    @if (active && Status.Paused)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="Resume">@T("Continue")</MudButton>
+    }
+    @if (active)
+    {
+        <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Stop" OnClick="Stop">@T("Stop")</MudButton>
+    }
+    @if (!active && RunStatuses.CanContinue(run.Status))
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="Continue">
+            @(run.Status == RunStatuses.Created ? T("Start") : T("Continue the run"))
+        </MudButton>
+    }
+    @if (run.Mode == RunModes.Apply && !active && RunStatuses.IsFinished(run.Status))
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.FactCheck" OnClick="Verify">@T("Verify…")</MudButton>
+        @if (Status.Counts.Any(c => c.Key.StartsWith("failed:", StringComparison.Ordinal) || c.Key == FileStatuses.Deferred))
+        {
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Replay" OnClick="Retry">@T("Retry failed…")</MudButton>
+        }
+        @if (Status.Counts.ContainsKey(FileStatuses.Verified))
+        {
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.FolderDelete" OnClick="Cleanup">@T("Delete empty folders…")</MudButton>
+        }
+    }
+    <MudMenu Label="@T("Reports")" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" Dense="true">
+        @foreach (var (name, title) in Reports)
+        {
+            <MudMenuItem OnClick="@(() => Report(name, "csv"))">@title — CSV</MudMenuItem>
+            <MudMenuItem OnClick="@(() => Report(name, "xlsx"))">@title — XLSX</MudMenuItem>
+        }
+        <MudMenuItem OnClick="@(() => Report("summary", "txt"))">@T("Summary") — TXT</MudMenuItem>
+        @if (run.Mode == RunModes.Apply)
+        {
+            <MudDivider />
+            <MudMenuItem OnClick="@(() => ApplyReport("rules", "csv"))">@T("Rules for SPOReplaceLink") — CSV</MudMenuItem>
+            <MudMenuItem OnClick="@(() => ApplyReport("verify", "csv"))">@T("Verification") — CSV</MudMenuItem>
+            <MudMenuItem OnClick="@(() => ApplyReport("pilot", "txt"))">@T("Pilot report") — TXT</MudMenuItem>
+        }
+        <MudMenuItem Href="@ReportsHelp" Icon="@Icons.Material.Outlined.HelpOutline">@T("What these reports contain")</MudMenuItem>
+    </MudMenu>
+    @if (!active && run.Status is not (RunStatuses.Running or RunStatuses.Paused))
+    {
+        <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.DeleteOutline" OnClick="Delete">@T("Delete…")</MudButton>
+    }
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired] public RunStatus Status { get; set; } = null!;
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private static (string, string)[] Reports =>
+    [
+        ("files", T("Files")), ("folders", T("Folders")), ("checkouts", T("Check-out")), ("attention", T("Need attention")),
+    ];
+
+    // Guide section 3.10 (Reports), by the id of the current language: a number with a dot in the URL could be taken for a file.
+    private static string ReportsHelp => $"help/{UserGuide.Instance.Resolve(ReportsSection)?.Id ?? ReportsSection}";
+    private const string ReportsSection = "3.10";
+
+    private Task Report(string name, string format) =>
+        SaveFile.Run(Saver, Snackbar, Exports.ReportFileName(Status.Run.Id, name, format), s => Exports.WriteReport(Runs.Store, Status.Run.Id, name, format, s));
+
+    private Task ApplyReport(string name, string format) =>
+        SaveFile.Run(Saver, Snackbar, $"run-{Status.Run.Id}-{name}.{format}", s =>
+        {
+            var report = name == "verify" ? ApplyResults.Verify(Runs.Store, Status.Run.Id, DateTimeOffset.UtcNow) : null;
+            ApplyResults.Write(Runs.Store, Status.Run.Id, name, format, s, report);
+        });
+
+    private async Task Verify()
+    {
+        var dialog = await Dialogs.ShowAsync<VerifyDialog>(T("Verify the move"), new DialogParameters<VerifyDialog> { { x => x.RunId, Status.Run.Id } },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        await dialog.Result;
+        await Changed.InvokeAsync();
+    }
+
+    private async Task Cleanup()
+    {
+        var dialog = await Dialogs.ShowAsync<CleanupDialog>(T("Delete empty source folders"), new DialogParameters<CleanupDialog> { { x => x.RunId, Status.Run.Id } },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        if (await dialog.Result is { Canceled: false, Data: long id })
+            Nav.NavigateTo($"runs/{id}");
+    }
+
+    private async Task Retry()
+    {
+        var dialog = await Dialogs.ShowAsync<RetryDialog>(T("Retry failed files"), new DialogParameters<RetryDialog> { { x => x.RunId, Status.Run.Id } },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        if (await dialog.Result is { Canceled: false, Data: int n })
+            Snackbar.Add(T($"Retry of {Ui.N(n)} files started."), Severity.Info);
+        await Changed.InvokeAsync();
+    }
+
+    private Task Pause() => Do(() => Runs.Pause(Status.Run.Id), Status.Run.Mode == RunModes.Apply
+        ? T("Paused: running batches finish, new ones do not start.")
+        : T("Paused: no new pages of the listing are requested."));
+
+    private Task Resume() => Do(() => Runs.Resume(Status.Run.Id), T("The run continues."));
+
+    private async Task Stop()
+    {
+        string text = Status.Run.Mode == RunModes.Apply
+            ? T("Running batches will finish, new ones will not start. The run can be continued later; unfinished batches start with a check.")
+            : T("The current page of the listing will finish and the position will be saved. The run can be continued from the same place.");
+        bool? yes = await Dialogs.ShowMessageBox(T("Stop the run?"), text, yesText: T("Stop"), cancelText: T("Cancel"));
+        if (yes == true)
+            await Do(() => Runs.Stop(Status.Run.Id), T("Stopping…"));
+    }
+
+    private Task Continue() => Do(() => Runs.Start(Status.Run.Id), T("The run has started."));
+
+    private async Task Delete()
+    {
+        long id = Status.Run.Id;
+        string text = T($"Run {id} will be deleted with all its results: the list of files ({Ui.N(Status.Files)}), statuses, attempts, metrics. It disappears from the list of runs, from reports and from the size estimate of new runs. Files in SharePoint are not changed.");
+        bool? yes = await Dialogs.ShowMessageBox(T("Delete the run?"), text, yesText: T("Delete"), cancelText: T("Cancel"));
+        if (yes != true)
+            return;
+        try
+        {
+            Runs.DeleteRun(id);
+            Snackbar.Add(T($"Run {id} deleted."), Severity.Info);
+            Nav.NavigateTo("runs");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+            await Changed.InvokeAsync();
+        }
+    }
+
+    private async Task Do(Action action, string message)
+    {
+        try
+        {
+            action();
+            Snackbar.Add(message, Severity.Info);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        await Changed.InvokeAsync();
+    }
+}

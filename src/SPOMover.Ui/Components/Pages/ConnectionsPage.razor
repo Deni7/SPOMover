@@ -1,0 +1,19 @@
+﻿@page "/connections"
+@inject SettingsService Settings
+
+<PageTitle>@T("Connections") — SPOMover</PageTitle>
+
+<SettingsList Kind="@SettingKinds.Connection" Route="connections" Title="@T("SharePoint connections")" Help="S1" ExtraTitle="@T("App · licenses · profiles")" Extra="Describe" />
+
+<MudText Typo="Typo.caption" Class="mt-3 d-block">
+    @T("A connection is an app in Entra with the Sites.Selected permission and a certificate. There are no secrets here: the certificate is in the Windows store, only its thumbprint is saved.")
+</MudText>
+
+@code {
+    private string Describe(string name)
+    {
+        var c = Settings.GetConnection(name);
+        var used = Settings.UsedBy(SettingKinds.Connection, name);
+        return c is null ? "" : $"{c.ClientId} · {c.Licenses} · {(used.Count == 0 ? "—" : string.Join(", ", used))}";
+    }
+}

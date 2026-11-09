@@ -1,0 +1,106 @@
+@* verify from the window: an inventory with changes only, then the check of every moved file. *@
+@inject RunService Runs
+
+<MudDialog>
+    <DialogContent>
+        @if (_report is null)
+        {
+            <MudText Typo="Typo.body2" Class="mb-2">
+                @T("Every moved file must be in the target at its new path and not in the source. This needs an inventory made after the move: an inventory of changes only takes minutes.")
+            </MudText>
+            @if (_hasLaterInventory)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">@T("There is an inventory made after the move — you can verify against it right away.")</MudAlert>
+            }
+            @if (_busy)
+            {
+                <MudProgressLinear Indeterminate="true" Class="my-2" />
+                <MudText Typo="Typo.caption">@_progress</MudText>
+            }
+        }
+        else
+        {
+            var r = _report;
+            <MudAlert Severity="@(r.Ok ? Severity.Success : Severity.Warning)" Class="mb-2">@(r.Ok ? T("Everything moved is in place.") : T("There are discrepancies."))</MudAlert>
+            <MudSimpleTable Dense="true">
+                <tbody>
+                    <tr><td>@T("Confirmed")</td><td><b>@Ui.N(r.Verified)</b></td></tr>
+                    <tr><td>@T("Not confirmed")</td><td>@Ui.N(r.Failed) @(r.Failed > 0 ? T("(status failed:verify, “Need attention” filter)") : "")</td></tr>
+                    <tr><td>@T("Not moved")</td><td>@Ui.N(r.NotMoved)</td></tr>
+                    <tr><td>@T("New files in the source under the moved folders")</td><td>@Ui.N(r.NewInSource.Count)</td></tr>
+                </tbody>
+            </MudSimpleTable>
+            @if (r.NewInSource.Count > 0)
+            {
+                <MudText Typo="Typo.caption" Class="d-block mt-2">@T("They appeared after the plan: update the inventory, build the plan again and move them.")</MudText>
+            }
+        }
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <HelpButton Section="3.17" Text="@T("Help")" />
+        <MudSpacer />
+        <MudButton OnClick="() => MudDialog.Close(DialogResult.Ok(_report))">@T("Close")</MudButton>
+        @if (_report is null)
+        {
+            @if (_hasLaterInventory)
+            {
+                <MudButton Variant="Variant.Outlined" Disabled="_busy" OnClick="() => VerifyAsync(update: false)">@T("Verify against the existing one")</MudButton>
+            }
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="() => VerifyAsync(update: true)">@T("Update the inventory and verify")</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter, EditorRequired] public long RunId { get; set; }
+
+    private bool _hasLaterInventory;
+    private bool _busy;
+    private string? _progress;
+    private string? _error;
+    private VerifyReport? _report;
+
+    protected override void OnParametersSet()
+    {
+        var run = Runs.Store.GetRun(RunId);
+        if (run?.FinishedAt is not { } finished)
+            return;
+        var profile = RunConfig.Parse(run.ConfigSnapshot).Profile;
+        _hasLaterInventory = MappingCheck.LastInventory(Runs.Store, profile) is { } inv && inv.CreatedAt >= finished;
+    }
+
+    private async Task VerifyAsync(bool update)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            if (update)
+            {
+                var run = Runs.Store.GetRun(RunId)!;
+                long inventory = Runs.CreateRun(RunModes.Inventory, run.ProfileName, update: true);
+                _progress = T($"Inventory of changes only (run {inventory})…");
+                StateHasChanged();
+                string status = await Runs.Start(inventory).Completion;
+                if (!RunStatuses.IsFinished(status))
+                    throw new InvalidOperationException(T($"Inventory {inventory} did not finish ({Ui.RunStatus(status)})."));
+            }
+            _progress = T("Verifying…");
+            StateHasChanged();
+            _report = await Task.Run(() => ApplyResults.Verify(Runs.Store, RunId, DateTimeOffset.UtcNow));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or ArgumentException or RunValidationException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

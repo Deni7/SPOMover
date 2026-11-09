@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SPOMover.Core.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Translations of the UI text (English → language), one file per area; see Localization/L.cs. -->
+    <EmbeddedResource Include="Localization\uk\*.json" LogicalName="i18n/uk/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.14" />
+    <PackageReference Include="MudBlazor" Version="8.15.0" />
+    <PackageReference Include="Markdig.Signed" Version="0.44.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The user guide is shown in the app as help: one source for the document and the app (English, Ukrainian). -->
+    <EmbeddedResource Include="..\..\docs\USER_GUIDE.md" LogicalName="USER_GUIDE.md" Link="Help\USER_GUIDE.md" />
+    <EmbeddedResource Include="..\..\docs\USER_GUIDE.uk.md" LogicalName="USER_GUIDE.uk.md" Link="Help\USER_GUIDE.uk.md" WithCulture="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SPOMover.Engine\SPOMover.Engine.csproj" />
+  </ItemGroup>
+
+</Project>

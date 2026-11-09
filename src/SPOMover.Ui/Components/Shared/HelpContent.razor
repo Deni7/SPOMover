@@ -1,0 +1,7 @@
+@* One section of the user guide as HTML. Links to other sections open their help pages. *@
+
+<div class="help-content">@((MarkupString)Section.Html)</div>
+
+@code {
+    [Parameter, EditorRequired] public UserGuide.Section Section { get; set; } = null!;
+}

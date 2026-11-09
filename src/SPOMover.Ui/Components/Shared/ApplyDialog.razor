@@ -1,0 +1,71 @@
+@* Stage 5: starting the move of a plan from the window, after the user has seen what it changes. *@
+@inject RunService Runs
+
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Class="mb-3">
+            @((MarkupString)T($"The move <b>changes SharePoint</b>: {Ui.N(Report.Plan.Files)} files ({Ui.Size(Report.Plan.Bytes)}) in {Ui.N(Report.Plan.Batches)} batches will go to the target libraries. Only a reverse move can bring them back."))
+        </MudAlert>
+        <MudSimpleTable Dense="true" Class="mb-3">
+            <tbody>
+                <tr><td>@T("Plan")</td><td>@T($"{Report.Plan.Id} of {Ui.Time(Report.Plan.CreatedAt)}, from inventory {Report.Plan.RunId}")</td></tr>
+                <tr><td>@T("Folders to create in the target")</td><td>@Ui.N(Report.Plan.Folders)</td></tr>
+                <tr><td>@T("Batches at once")</td><td>@Parallel</td></tr>
+                <tr><td>@T("Estimate")</td><td>@T($"≈ {Ui.Duration(Report.Duration)} of net time")</td></tr>
+            </tbody>
+        </MudSimpleTable>
+        <div class="mb-3"><TargetCheckView Profile="@Profile" /></div>
+        @if (Report.CheckedOut > 0)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">@((MarkupString)T($"The batches have {Ui.N(Report.CheckedOut)} checked-out files: they will wait to be checked in; after the limit — <code>failed:locked</code>."))</MudAlert>
+        }
+        @if (Report.Plan.Conflicts > 0)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">@T($"{Ui.N(Report.Plan.Conflicts)} files with a name conflict are not planned: they will stay in the source.")</MudAlert>
+        }
+        @if (InventoryAge is { } age && age > TimeSpan.FromHours(24))
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">@T($"The plan’s inventory is {Ui.Duration(age)} old. The plan does not see changes made after it; better update the inventory and build the plan again.")</MudAlert>
+        }
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+            @T("SharePoint adds properties to Office documents (.xls, .xlsx, .doc, .pptx) during the move: the file size grows by a few KB; the content, dates and authors stay the same.")
+        </MudAlert>
+        <MudCheckBox T="bool" @bind-Value="_confirmed" Color="Color.Error" Label="@T("I have checked the plan and want to move the files now")" />
+        <IssueList Issues="_issues" ShowOk="false" />
+    </DialogContent>
+    <DialogActions>
+        <HelpButton Section="3.17" Text="@T("Help")" />
+        <MudSpacer />
+        <MudButton OnClick="() => MudDialog.Cancel()">@T("Cancel")</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" Disabled="!_confirmed" OnClick="Start">@T("Move")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter, EditorRequired] public string Profile { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public PlanReport Report { get; set; } = null!;
+    [Parameter] public int Parallel { get; set; }
+    [Parameter] public TimeSpan? InventoryAge { get; set; }
+
+    private bool _confirmed;
+    private IReadOnlyList<ValidationIssue> _issues = [];
+
+    private void Start()
+    {
+        try
+        {
+            long id = Runs.CreateApplyRun(Profile, Report.Plan.Id);
+            Runs.Start(id);
+            MudDialog.Close(DialogResult.Ok(id));
+        }
+        catch (RunValidationException ex)
+        {
+            _issues = ex.Issues;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or ArgumentException)
+        {
+            _issues = [new ValidationIssue(IssueSeverity.Error, ex.Message)];
+        }
+    }
+}

@@ -1,0 +1,28 @@
+{
+  // Split the Documents library of the "archive" site into three libraries of the same site.
+  "name": "split",
+  // Source library; "folder" limits the inventory to a folder (empty — the whole library).
+  "source": { "siteUrl": "https://contoso.sharepoint.com/sites/archive", "library": "Documents" },
+  // Target libraries — on the same site, they must already exist.
+  "targetLibraries": [ "Finance", "HR", "Archive" ],
+  // Mapping: path in the source → library and path in it. The row with the longest match wins.
+  // Empty path — the same path as in the source; "/" — the library root; library "-" — keep in the source.
+  "mapping": [
+    { "source": "Finance", "library": "Finance", "path": "/" },
+    { "source": "Accounting/Reports", "library": "Finance", "path": "Reports" },
+    { "source": "HR", "library": "HR", "path": "/" },
+    { "source": "HR/Personnel files", "library": "-", "comment": "stay until a separate decision" },
+    { "source": "Archive", "library": "Archive", "path": "/" }
+  ],
+  // Connections are stored on the host separately (connections import). More than one — only with pool.enabled.
+  "connections": [ "spo-mover-1" ],
+  "pool": { "enabled": false, "tenantCeilingPercent": 50 },
+  "performance": {
+    "concurrency": 8,
+    "budgetPercent": 60,
+    "windows": [ { "days": [ "Mon", "Tue", "Wed", "Thu", "Fri" ], "from": "20:00", "to": "07:00", "budgetPercent": 80 },
+                 { "days": [ "Sat", "Sun" ], "from": "00:00", "to": "24:00", "budgetPercent": 80 } ],
+    "timeZone": "FLE Standard Time"
+  },
+  "retry": { "requestAttempts": 6, "blockedMinutes": 15 }
+}

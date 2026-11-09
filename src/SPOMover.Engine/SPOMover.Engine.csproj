@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\SPOMover.Core\SPOMover.Core.csproj" />
+    <ProjectReference Include="..\SPOMover.Spo\SPOMover.Spo.csproj" />
+    <ProjectReference Include="..\SPOMover.State\SPOMover.State.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SPOMover.Engine.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,127 @@
+﻿@page "/help"
+@page "/help/{Id}"
+@* The user guide in the app: sections in a tree, search, one section per page. *@
+@inject NavigationManager Nav
+
+<PageTitle>@T("Help — SPOMover")</PageTitle>
+
+<MudGrid Spacing="3">
+    <MudItem xs="12" md="4" lg="3">
+        <MudPaper Class="pa-2 help-nav" Elevation="1">
+            <MudTextField T="string" @bind-Value="_query" Immediate="true" DebounceInterval="250" Placeholder="@T("Search help")" Clearable="true"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Margin="Margin.Dense" Class="mb-2" />
+            @if (!string.IsNullOrWhiteSpace(_query))
+            {
+                var found = Guide.Search(_query);
+                <MudText Typo="Typo.caption" Class="px-2">@T($"Sections found: {found.Count}")</MudText>
+                <MudNavMenu Dense="true">
+                    @foreach (var s in found)
+                    {
+                        <MudNavLink Href="@($"help/{s.Id}")" Match="NavLinkMatch.All">@s.Title</MudNavLink>
+                    }
+                </MudNavMenu>
+            }
+            else
+            {
+                <MudNavMenu Dense="true">
+                    @if (Guide.Intro is { } intro)
+                    {
+                        <MudNavLink Href="help/intro" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Info">@intro.Title</MudNavLink>
+                    }
+                    @foreach (var part in Guide.Parts)
+                    {
+                        <MudNavGroup Title="@part.Title" Expanded="@(part.Title == _section?.Group || part.Sections.Any(s => s.Children.Any(c => c.Id == _section?.Id)))">
+                            @foreach (var s in part.Sections)
+                            {
+                                @if (s.Children.Count == 0)
+                                {
+                                    <MudNavLink Href="@($"help/{s.Id}")" Match="NavLinkMatch.All">@(s.Level == 1 ? T("Introduction") : s.Title)</MudNavLink>
+                                }
+                                else
+                                {
+                                    <MudNavGroup Title="@s.Title" Expanded="@(s.Id == _section?.Id || s.Children.Any(c => c.Id == _section?.Id))">
+                                        <MudNavLink Href="@($"help/{s.Id}")" Match="NavLinkMatch.All">@T("Section overview")</MudNavLink>
+                                        @foreach (var c in s.Children)
+                                        {
+                                            <MudNavLink Href="@($"help/{c.Id}")" Match="NavLinkMatch.All">@c.Title</MudNavLink>
+                                        }
+                                    </MudNavGroup>
+                                }
+                            }
+                        </MudNavGroup>
+                    }
+                </MudNavMenu>
+            }
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" md="8" lg="9">
+        @if (_section is null)
+        {
+            <MudAlert Severity="Severity.Warning">@T("Section not found. Choose a section on the left.")</MudAlert>
+        }
+        else
+        {
+            <MudPaper Class="pa-4" Elevation="1">
+                @if (Breadcrumb() is { Length: > 0 } crumb)
+                {
+                    <MudText Typo="Typo.caption" Style="color:#616161">@crumb</MudText>
+                }
+                <MudText Typo="Typo.h5" Class="mb-3">@_section.Title</MudText>
+                <HelpContent Section="_section" />
+                @if (_section.Children.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle1" Class="mt-4">@T("Subsections")</MudText>
+                    <MudList T="string" Dense="true">
+                        @foreach (var c in _section.Children)
+                        {
+                            <MudListItem T="string" Icon="@Icons.Material.Filled.ChevronRight" Href="@($"help/{c.Id}")">@c.Title</MudListItem>
+                        }
+                    </MudList>
+                }
+                <MudDivider Class="my-4" />
+                <MudStack Row="true" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+                    @if (Neighbour(-1) is { } prev)
+                    {
+                        <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" Href="@($"help/{prev.Id}")">@prev.Title</MudButton>
+                    }
+                    else
+                    {
+                        <span></span>
+                    }
+                    @if (Neighbour(1) is { } next)
+                    {
+                        <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="@($"help/{next.Id}")">@next.Title</MudButton>
+                    }
+                </MudStack>
+            </MudPaper>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter] public string? Id { get; set; }
+
+    private static UserGuide Guide => UserGuide.Instance;
+    private UserGuide.Section? _section;
+    private string? _query;
+
+    protected override void OnParametersSet()
+    {
+        // Route values come URL-decoded; ids are the guide's anchors (lower case; Cyrillic in the Ukrainian guide), a section
+        // number ("3.16") or an id of the guide in the other language (after the language was switched) also works.
+        _section = Guide.Resolve(Id ?? "intro") ?? (Id is null ? Guide.Pages.FirstOrDefault() : null);
+    }
+
+    private string Breadcrumb()
+    {
+        var parent = _section?.ParentId is { } p ? Guide.Find(p) : null;
+        return string.Join(" › ", new[] { _section?.Group, parent?.Title }.Where(x => !string.IsNullOrEmpty(x)));
+    }
+
+    private UserGuide.Section? Neighbour(int step)
+    {
+        int i = Guide.Pages.ToList().FindIndex(s => s.Id == _section?.Id);
+        int j = i + step;
+        return i >= 0 && j >= 0 && j < Guide.Pages.Count ? Guide.Pages[j] : null;
+    }
+}

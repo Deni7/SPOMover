@@ -1,0 +1,421 @@
+@page "/profiles/{Name}"
+@* GUI-5, CFG-2, CFG-6, THR-11: everything a run needs, edited in tabs, validated on save. *@
+@inject SettingsService Settings
+@inject RunService Runs
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IFileSaver Saver
+
+<PageTitle>@T($"Profile {Name}") — SPOMover</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-3">
+    <MudLink Href="profiles">@T("← profiles")</MudLink>
+    <MudText Typo="Typo.h5">@(IsNew ? T("New profile") : T($"Profile “{Name}”"))</MudText>
+    <HelpButton Section="3.3" />
+    <MudSpacer />
+    @if (!IsNew)
+    {
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" OnClick="ExportJson">JSON</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="Run">@T("Run…")</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.AccountTree" OnClick="OpenPlan">@T("Plan…")</MudButton>
+    }
+    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.FactCheck" OnClick="Validate">@T("Check")</MudButton>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="Save">@T("Save")</MudButton>
+</MudStack>
+
+@if (_issues is not null)
+{
+    int errors = _issues.Count(i => i.Severity == IssueSeverity.Error);
+    @if (errors > 0)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@T($"Errors: {errors} — they are marked on the tabs and next to the fields. The run will not start until they are fixed.")</MudAlert>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">@(_issues.Count > 0 ? T($"No errors, warnings: {_issues.Count}.") : T("No errors."))</MudAlert>
+    }
+    <IssueList Issues="IssuesOf(Section.Other)" ShowOk="false" />
+}
+
+<MudTabs Elevation="1" Rounded="true" PanelClass="pa-4" @bind-ActivePanelIndex="_tab">
+    <MudTabPanel Text="@T("Libraries")" BadgeData="@Badge(Section.Targets)" BadgeColor="Color.Error">
+        <div class="d-flex justify-end"><HelpButton Section="3.3.1" Text="@T("What these fields mean")" /></div>
+        <IssueList Issues="IssuesOf(Section.Targets)" ShowOk="false" />
+        @if (IsNew)
+        {
+            <MudTextField T="string" Label="@T("Profile name")" @bind-Value="_name" Required="true" Class="mb-3" Style="max-width:420px" />
+        }
+        @if (_estimate is { } e)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">@T($"Files and size are from the inventory (run {e.RunId} of {Ui.Time(e.At)}).")</MudAlert>
+        }
+        <MudText Typo="Typo.subtitle1">@T("Source library")</MudText>
+        <MudPaper Outlined="true" Elevation="0" Class="pa-3 mb-4">
+            @if (_p.Source is { } src)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                    <div style="min-width:0">
+                        <MudText Typo="Typo.body1"><b>@src.Library</b>@(string.IsNullOrEmpty(src.Folder) ? "" : $" / {src.Folder.Trim('/')}")</MudText>
+                        <MudText Typo="Typo.caption" Class="wrap-anywhere">@src.SiteUrl</MudText>
+                    </div>
+                    <MudSpacer />
+                    <MudText Typo="Typo.body2">@Amount(src.Library)</MudText>
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Edit" OnClick="EditSource">@T("Change the source")</MudButton>
+                </MudStack>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" OnClick="EditSource">@T("Choose the source library")</MudButton>
+            }
+        </MudPaper>
+
+        <MudText Typo="Typo.subtitle1">@T("Target libraries (same site)")</MudText>
+        <MudTable Items="_p.TargetLibraries" Dense="true" T="string">
+            <HeaderContent><MudTh>@T("Library")</MudTh><MudTh>@T("Already contains ≈")</MudTh><MudTh>@T("Rows in mapping")</MudTh><MudTh></MudTh></HeaderContent>
+            <RowTemplate>
+                <MudTd><b>@context</b></MudTd>
+                <MudTd>@Amount(context)</MudTd>
+                <MudTd>@_p.Mapping.Count(m => string.Equals(m.Library?.Trim(), context.Trim(), StringComparison.OrdinalIgnoreCase))</MudTd>
+                <MudTd Class="nowrap">
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="() => RemoveTarget(context)" aria-label="@T("Remove library")" />
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>@T("No target libraries.")</NoRecordsContent>
+        </MudTable>
+        <MudButton Class="mt-2" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" OnClick="AddTargets" Disabled="_p.Source is null">@T("Add libraries")</MudButton>
+        <MudText Typo="Typo.caption" Class="mt-2 d-block">
+            @T("The inventory lists the source and all target libraries: this shows what is already in the targets, and the mapping check finds name conflicts.")
+        </MudText>
+    </MudTabPanel>
+
+    <MudTabPanel Text="@T("Mapping")" BadgeData="@Badge(Section.Mapping)" BadgeColor="Color.Error">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2">
+            <MudText Typo="Typo.body2" Style="flex:1;min-width:300px">
+                @T("For each path the row with the longest match applies; the order of rows does not matter. An empty path means the same as in the source; “/” is the library root; “keep in source” is an exception inside a folder that is moved. Mapping errors do not prevent the inventory.")
+            </MudText>
+            <HelpButton Section="3.3.2" Text="@T("What these fields mean")" />
+            @if (!IsNew)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.FactCheck" OnClick="Coverage">@T("Check coverage…")</MudButton>
+            }
+        </MudStack>
+        <MappingEditor Rows="_p.Mapping" Libraries="_p.TargetLibraries" SourceLibrary="@_p.Source?.Library" FileName="@(IsNew ? "profile" : Name)" />
+    </MudTabPanel>
+
+    <MudTabPanel Text="@T("Planning")" BadgeData="@Badge(Section.Planning)" BadgeColor="Color.Error">
+        <div class="d-flex justify-end"><HelpButton Section="3.3.3" Text="@T("What these fields mean")" /></div>
+        <IssueList Issues="IssuesOf(Section.Planning)" ShowOk="false" />
+        <MudText Typo="Typo.subtitle1">@T("Batches")</MudText>
+        <MudGrid Spacing="2" Class="mb-1">
+            <MudItem xs="12" sm="4" md="3">
+                <MudNumericField T="int" Label="@T("Largest batch, items")" @bind-Value="_p.Plan.MaxBatchItems" Min="1" Max="@(PlanOptions.ThresholdItems - 1)"
+                                 HelperText="@T("files and folders of the subtree; under 5,000")" />
+            </MudItem>
+            <MudItem xs="12" sm="4" md="3">
+                <MudNumericField T="int" Label="@T("Batches at once")" @bind-Value="_p.Plan.Parallel" Min="1" Max="64" HelperText="@T("for both the forecast and the move")" />
+            </MudItem>
+            <MudItem xs="12" sm="4" md="3">
+                <MudNumericField T="double" Label="@T("Batch speed, files/s")" @bind-Value="_p.Plan.FilesPerSecond" Min="0.1" Max="1000" Step="0.1" HelperText="@T("for the forecast; measured 2.2")" />
+            </MudItem>
+        </MudGrid>
+        <MudText Typo="Typo.caption" Class="d-block mb-4">
+            @T("A folder within the limit is moved by one SharePoint request (≈ 2 files/s on real documents). A larger folder is split: subfolders as separate batches, its files as batches of files. A higher limit means fewer batches, but each request takes longer.")
+        </MudText>
+        <MudText Typo="Typo.subtitle1">@T("Move settings")</MudText>
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="6" md="4">
+                <MudSwitch T="bool" @bind-Value="_p.Move.BypassSharedLocks" Label="@T("Move files open for co-authoring")" Color="Color.Warning" />
+            </MudItem>
+            <MudItem xs="12" sm="4" md="3">
+                <MudNumericField T="double" Label="@T("Wait per item, s")" @bind-Value="_p.Move.SecondsPerItem" Min="0.01" Max="60" Step="0.05"
+                                 HelperText="@T("on top of the request timeout; measured 0.15–0.45")" />
+            </MudItem>
+        </MudGrid>
+        @if (_p.Move.BypassSharedLocks)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">@T("Files open in Word/Excel for the web will be moved while being edited. This has not been tested on a tenant yet.")</MudAlert>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="@T("Performance")" BadgeData="@Badge(Section.Performance)" BadgeColor="Color.Error">
+        <div class="d-flex justify-end"><HelpButton Section="3.3.4" Text="@T("What these fields mean")" /></div>
+        <IssueList Issues="IssuesOf(Section.Performance)" ShowOk="false" />
+        <MudStack Row="true" Spacing="2" Class="mb-3" Wrap="Wrap.Wrap">
+            <MudText Typo="Typo.subtitle2">@T("Presets:")</MudText>
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="() => Preset(1)">@T("Careful")</MudButton>
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="() => Preset(2)">@T("Standard")</MudButton>
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="() => Preset(3)">@T("Off-hours")</MudButton>
+        </MudStack>
+        <MudGrid Spacing="2">
+            <MudItem xs="6" md="2"><MudNumericField T="int" Label="@T("Requests at once")" @bind-Value="_p.Performance.Concurrency" Min="1" Max="64" /></MudItem>
+            <MudItem xs="6" md="2"><MudNumericField T="int" Label="@T("RU budget, % of limit")" @bind-Value="_p.Performance.BudgetPercent" Min="1" Max="100" /></MudItem>
+            <MudItem xs="6" md="2"><MudNumericField T="int" Label="@T("Request timeout, s")" @bind-Value="_p.Performance.RequestTimeoutSeconds" Min="5" /></MudItem>
+            <MudItem xs="12" md="5">
+                <MudSelect T="string" Label="@T("Time zone of the windows")" @bind-Value="_p.Performance.TimeZone" Clearable="true">
+                    @foreach (var tz in TimeZoneInfo.GetSystemTimeZones())
+                    {
+                        <MudSelectItem Value="@tz.Id">@tz.DisplayName</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="4"><MudSwitch T="bool" @bind-Value="_p.Performance.OnlyInWindows" Label="@T("Work only in the windows")" Color="Color.Primary" /></MudItem>
+        </MudGrid>
+        <MudText Typo="Typo.subtitle2" Class="mt-3">@T("Work windows (THR-5)")</MudText>
+        @foreach (var w in _p.Performance.Windows)
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-1">
+                <MudSelect T="string" Label="@T("Days")" MultiSelection="true" SelectedValues="w.Days" SelectedValuesChanged="v => w.Days = v.ToList()" Style="min-width:220px" Margin="Margin.Dense">
+                    @foreach (var d in Days)
+                    {
+                        <MudSelectItem Value="@d">@d</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudTextField T="string" Label="@T("From")" @bind-Value="w.From" Style="width:90px" Margin="Margin.Dense" />
+                <MudTextField T="string" Label="@T("To")" @bind-Value="w.To" Style="width:90px" Margin="Margin.Dense" />
+                <MudNumericField T="int" Label="@T("Budget, %")" @bind-Value="w.BudgetPercent" Min="1" Max="100" Style="width:110px" Margin="Margin.Dense" />
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" OnClick="() => _p.Performance.Windows.Remove(w)" />
+            </MudStack>
+        }
+        <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" OnClick="AddWindow">@T("Add window")</MudButton>
+    </MudTabPanel>
+
+    <MudTabPanel Text="@T("Retrying")" BadgeData="@Badge(Section.Retry)" BadgeColor="Color.Error">
+        <div class="d-flex justify-end"><HelpButton Section="3.3.5" Text="@T("What these fields mean")" /></div>
+        <IssueList Issues="IssuesOf(Section.Retry)" ShowOk="false" />
+        <MudGrid Spacing="2">
+            <MudItem xs="6" md="3"><MudNumericField T="int" Label="@T("Attempts per request")" @bind-Value="_p.Retry.RequestAttempts" Min="1" Max="20" /></MudItem>
+            <MudItem xs="6" md="3"><MudNumericField T="int" Label="@T("Attempts per batch (transient errors)")" @bind-Value="_p.Retry.FileAttempts" Min="1" Max="20" /></MudItem>
+            <MudItem xs="12" md="4">
+                <MudTextField T="string" Label="@T("Pauses between batch attempts, min")" Value="@string.Join("; ", _p.Retry.FilePausesMinutes.Select(Ui.Number))" ValueChanged="PausesChanged"
+                              HelperText="@T("separated by “;”, e.g. 1; 5; 15")" />
+            </MudItem>
+            <MudItem xs="6" md="3"><MudNumericField T="double" Label="@T("Locked: retry every, min")" @bind-Value="_p.Retry.LockedWaveMinutes" Min="0.001" /></MudItem>
+            <MudItem xs="6" md="3"><MudNumericField T="double" Label="@T("Locked: wait up to, min")" @bind-Value="_p.Retry.LockedLimitMinutes" Min="0.001" /></MudItem>
+            <MudItem xs="6" md="3"><MudNumericField T="int" Label="@T("Access denials in a row — stop")" @bind-Value="_p.Retry.AuthFailuresToStop" Min="1" /></MudItem>
+            <MudItem xs="6" md="3"><MudNumericField T="double" Label="@T("Only 503 for this many min — blocked")" @bind-Value="_p.Retry.BlockedMinutes" Min="0.1" /></MudItem>
+        </MudGrid>
+        <MudText Typo="Typo.caption" Class="mt-2 d-block">
+            @((MarkupString)T("A request is retried by itself on transient errors. A move batch is retried up to “attempts per batch” times with pauses; checked-out or open files are retried in waves until “wait up to” passes, then <code>failed:locked</code>. A move request without a response is not repeated: the source and the target are compared first."))
+        </MudText>
+    </MudTabPanel>
+
+    <MudTabPanel Text="@T("Connections")" BadgeData="@Badge(Section.Connections)" BadgeColor="Color.Error">
+        <div class="d-flex justify-end"><HelpButton Section="3.3.6" Text="@T("What these fields mean")" /></div>
+        <IssueList Issues="IssuesOf(Section.Connections)" ShowOk="false" />
+        <MudSelect T="string" Label="@T("Connections")" MultiSelection="true" SelectedValues="_p.Connections" SelectedValuesChanged="ConnectionsChanged">
+            @foreach (var (c, _) in Settings.List(SettingKinds.Connection))
+            {
+                <MudSelectItem Value="@c">@c</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSwitch T="bool" Value="_p.Pool.Enabled" ValueChanged="PoolChanged" Label="@T("App pool (several connections in one run)")" Color="Color.Warning" Class="mt-3" />
+        @if (_p.Pool.Enabled)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mt-2">
+                @T("Microsoft does not recommend several apps for one task: they all share the tenant budget with users and other apps (backup, migration). The total load of the pool is limited by the ceiling below.")
+            </MudAlert>
+            <MudNumericField T="int" Label="@T("Tenant budget ceiling, %")" @bind-Value="_p.Pool.TenantCeilingPercent" Min="1" Max="100" Class="mt-2" Style="max-width:260px" />
+        }
+        @if (_p.Connections.Count > 1 && !_p.Pool.Enabled)
+        {
+            <MudAlert Severity="Severity.Error" Class="mt-2">@T("Several connections work only with the pool turned on.")</MudAlert>
+        }
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    [Parameter] public string Name { get; set; } = string.Empty;
+
+    private static readonly string[] Days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    private bool IsNew => Name == "~new";
+
+    private enum Section { Targets, Mapping, Planning, Performance, Retry, Connections, Other }
+
+    /// <summary>Which tab an issue belongs to, by the setting it names.</summary>
+    private static Section SectionOf(ValidationIssue i)
+    {
+        string m = i.Message;
+        if (i.Area == Core.Mapping.MappingSet.Area)
+            return Section.Mapping;
+        if (m.StartsWith("source", StringComparison.Ordinal) || m.StartsWith("targetLibraries", StringComparison.Ordinal))
+            return Section.Targets;
+        if (m.StartsWith("plan.", StringComparison.Ordinal) || m.StartsWith("move.", StringComparison.Ordinal))
+            return Section.Planning;
+        if (m.StartsWith("performance", StringComparison.Ordinal))
+            return Section.Performance;
+        if (m.StartsWith("retry", StringComparison.Ordinal))
+            return Section.Retry;
+        // Messages of Profile/Connection validation, in English or in Ukrainian (the language they were made in).
+        if (m.StartsWith("connections", StringComparison.Ordinal) || m.StartsWith("pool", StringComparison.Ordinal)
+            || m.StartsWith("Connection", StringComparison.OrdinalIgnoreCase) || m.StartsWith("Several connections", StringComparison.OrdinalIgnoreCase)
+            || m.StartsWith("Multiple connections", StringComparison.OrdinalIgnoreCase) || m.StartsWith("Pool", StringComparison.OrdinalIgnoreCase)
+            || m.StartsWith("App pool", StringComparison.OrdinalIgnoreCase) || m.StartsWith("The pool", StringComparison.OrdinalIgnoreCase)
+            || m.StartsWith("Підключення", StringComparison.Ordinal) || m.StartsWith("Кілька підключень", StringComparison.Ordinal) || m.StartsWith("Увімкнено пул", StringComparison.Ordinal)) // i18n-ignore
+            return Section.Connections;
+        return Section.Other;
+    }
+
+    private IReadOnlyList<ValidationIssue> IssuesOf(Section s) =>
+        (_issues ?? []).Where(i => SectionOf(i) == s).ToList();
+
+    private object? Badge(Section s)
+    {
+        int n = (_issues ?? []).Count(i => SectionOf(i) == s && i.Severity == IssueSeverity.Error);
+        return n > 0 ? n : null;
+    }
+
+    private Profile _p = new();
+    private string? _name;
+    private IReadOnlyList<ValidationIssue>? _issues;
+    private ProfileInsights.Estimate? _estimate;
+    private int _tab;
+
+    protected override void OnParametersSet()
+    {
+        _p = IsNew ? new Profile() : Settings.GetProfile(Name) ?? new Profile { Name = Name };
+        // GUI-27: an existing profile shows its problems as soon as it is opened.
+        _issues = IsNew ? null : Runs.ValidateProfile(_p).Issues;
+        if (!IsNew)
+            _estimate = ProfileInsights.For(Runs.Store, _p);
+    }
+
+    private string Amount(string? library) =>
+        _estimate?.Of(library) is { } a ? T($"{Ui.N(a.Files)} files, {Ui.Size(a.Bytes)}") : T("not listed yet");
+
+    private async Task EditSource()
+    {
+        var parameters = new DialogParameters<TargetDialog> { { x => x.Value, _p.Source }, { x => x.Connection, _p.Connections.FirstOrDefault() } };
+        var dialog = await Dialogs.ShowAsync<TargetDialog>(T("Source library"), parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        if (await dialog.Result is { Canceled: false, Data: Target result })
+            _p.Source = result;
+    }
+
+    private async Task AddTargets()
+    {
+        var parameters = new DialogParameters<LibraryPickerDialog>
+        {
+            { x => x.SiteUrl, _p.Source?.SiteUrl ?? string.Empty },
+            { x => x.SourceLibrary, _p.Source?.Library },
+            { x => x.Connection, _p.Connections.FirstOrDefault() },
+        };
+        var dialog = await Dialogs.ShowAsync<LibraryPickerDialog>(T("Target libraries"), parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        if (await dialog.Result is not { Canceled: false, Data: List<string> names })
+            return;
+        foreach (string name in names.Where(n => !_p.TargetLibraries.Contains(n, StringComparer.OrdinalIgnoreCase)))
+            _p.TargetLibraries.Add(name);
+    }
+
+    private async Task RemoveTarget(string library)
+    {
+        int rows = _p.Mapping.Count(m => string.Equals(m.Library?.Trim(), library.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (rows > 0 && await Dialogs.ShowMessageBox(T("Remove the library?"), T($"Mapping rows that refer to “{library}”: {rows}. They will be errors until you change them."),
+                yesText: T("Remove"), cancelText: T("Cancel")) != true)
+            return;
+        _p.TargetLibraries.Remove(library);
+    }
+
+    /// <summary>MAP-5 needs the saved profile: the check reads it from the store, like the CLI.</summary>
+    private void Coverage()
+    {
+        Save();
+        Nav.NavigateTo($"profiles/{Uri.EscapeDataString(Name)}/coverage");
+    }
+
+    /// <summary>Ready-made sets of performance settings.</summary>
+    private void Preset(int kind)
+    {
+        var perf = _p.Performance;
+        switch (kind)
+        {
+            case 1:
+                (perf.Concurrency, perf.BudgetPercent) = (4, 50);
+                perf.Windows = [];
+                perf.OnlyInWindows = false;
+                break;
+            case 2:
+                (perf.Concurrency, perf.BudgetPercent) = (8, 80);
+                perf.Windows = [];
+                perf.OnlyInWindows = false;
+                break;
+            default:
+                (perf.Concurrency, perf.BudgetPercent) = (8, 50);
+                perf.Windows =
+                [
+                    new ScheduleWindow { Days = [.. Days[..5]], From = "20:00", To = "07:00", BudgetPercent = 80 },
+                    new ScheduleWindow { Days = ["Sat", "Sun"], From = "00:00", To = "24:00", BudgetPercent = 80 },
+                ];
+                perf.OnlyInWindows = true;
+                break;
+        }
+        Snackbar.Add(T("Preset applied; save the profile."), Severity.Info);
+    }
+
+    private void PausesChanged(string text)
+    {
+        var values = new List<double>();
+        foreach (string part in (text ?? string.Empty).Split([';', ' '], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (double.TryParse(part.Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) && v >= 0)
+                values.Add(v);
+        }
+        _p.Retry.FilePausesMinutes = values;
+    }
+
+    private void OpenPlan()
+    {
+        Save();
+        Nav.NavigateTo($"profiles/{Uri.EscapeDataString(Name)}/plan");
+    }
+
+    private void AddWindow() => _p.Performance.Windows.Add(new ScheduleWindow { Days = [.. Days[..5]], From = "20:00", To = "07:00" });
+
+    private void ConnectionsChanged(IEnumerable<string> values)
+    {
+        _p.Connections = values.ToList();
+    }
+
+    /// <summary>THR-11: the pool is turned on only explicitly, after the warning.</summary>
+    private async Task PoolChanged(bool on)
+    {
+        if (on && await Dialogs.ShowMessageBox(T("Turn on the app pool?"),
+                T("Microsoft does not recommend creating several apps for one task to get around the limits: they all share one tenant budget, and a long overrun may lead to throttling of users and blocking of the app. The load of the pool will be limited by the tenant budget ceiling."),
+                yesText: T("Turn on"), cancelText: T("Cancel")) != true)
+            return;
+        _p.Pool.Enabled = on;
+    }
+
+    private Task ExportJson() =>
+        SaveFile.Text(Saver, Snackbar, $"{SaveFile.Name(Name)}.profile.json", Settings.GetJson(SettingKinds.Profile, Name) ?? _p.ToJson());
+
+    private void Validate() => _issues = Runs.ValidateProfile(_p).Issues;
+
+    private void Save()
+    {
+        string name = IsNew ? (_name ?? string.Empty).Trim() : Name;
+        try
+        {
+            if (IsNew && Settings.GetProfile(name) is not null)
+                throw new InvalidOperationException(T($"Profile “{name}” already exists."));
+            _issues = Settings.Save(name, _p);
+            int errors = _issues.Count(i => i.Severity == IssueSeverity.Error);
+            Snackbar.Add(errors == 0 ? T("Saved, the profile is ready to run.") : T($"Saved; errors: {errors} — the run will not start until they are fixed."),
+                errors == 0 ? Severity.Success : Severity.Warning);
+            if (IsNew)
+                Nav.NavigateTo($"profiles/{Uri.EscapeDataString(name)}");
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task Run()
+    {
+        var dialog = await Dialogs.ShowAsync<NewRunDialog>(T("New run"), new DialogParameters<NewRunDialog> { { x => x.Profile, Name } },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        if (await dialog.Result is { Canceled: false, Data: long id })
+            Nav.NavigateTo($"runs/{id}");
+    }
+}

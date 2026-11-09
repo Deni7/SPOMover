@@ -1,0 +1,19 @@
+@* The target check on its own, from the plan page: before the move dialog, while there is time to fix the libraries. *@
+<MudDialog>
+    <DialogContent>
+        <TargetCheckView Profile="@Profile" />
+        <MudText Typo="Typo.caption" Class="mt-2 mud-text-secondary" Style="display:block">
+            @T("Compares the columns users fill in, content types, “Require check-out”, content approval and minor versions of the source library and of each target library. Nothing is changed; the same check is made by the “Move…” window and by the run itself (notes on the card).")
+        </MudText>
+    </DialogContent>
+    <DialogActions>
+        <HelpButton Section="3.18" Text="@T("Help")" />
+        <MudSpacer />
+        <MudButton OnClick="() => MudDialog.Close()">@T("Close")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter, EditorRequired] public string Profile { get; set; } = string.Empty;
+}

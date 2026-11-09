@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SPOMover</title>
+    <base href="/" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link href="_content/SPOMover.Ui/lib/uplot/uPlot.min.css" rel="stylesheet" />
+    <style>
+        .breakdown-row { padding: 8px 0; border-bottom: 1px solid var(--mud-palette-lines-default); }
+        .breakdown-row:last-child { border-bottom: none; padding-bottom: 0; }
+        .uplot { font-family: inherit; }
+        .uplot .u-legend { font-size: 0.8rem; }
+        html, body { font-family: "Segoe UI", Roboto, sans-serif; }
+        .stat-value { font-size: 1.7rem; font-weight: 500; line-height: 1.2; }
+        .stat-card-link { display: block; height: 100%; color: inherit; text-decoration: none; }
+        .stat-card-clickable { cursor: pointer; transition: box-shadow .15s; }
+        .stat-card-link:hover .stat-card-clickable, .stat-card-link:focus-visible .stat-card-clickable { box-shadow: var(--mud-elevation-4); }
+        .stat-card-link:hover .stat-value { text-decoration: underline; }
+        .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.85rem; word-break: break-all; }
+        .nowrap { white-space: nowrap; }
+        .wrap-anywhere { overflow-wrap: anywhere; }
+        .loading { display: flex; align-items: center; justify-content: center; height: 100vh; color: #555; }
+        .help-content { line-height: 1.6; overflow-wrap: break-word; }
+        .help-content h1, .help-content h2, .help-content h3, .help-content h4 { margin: 1.2em 0 0.5em; font-weight: 500; }
+        .help-content p, .help-content ul, .help-content ol { margin: 0 0 0.8em; }
+        .help-content ul, .help-content ol { padding-left: 1.6em; }
+        .help-content li { margin: 0.2em 0; }
+        .help-content table { border-collapse: collapse; width: 100%; margin: 0.5em 0 1em; font-size: 0.875rem; }
+        .help-content th, .help-content td { border: 1px solid #e0e0e0; padding: 6px 8px; vertical-align: top; text-align: left; min-width: 96px; overflow-wrap: normal; }
+        .help-content td code { word-break: break-word; }
+        .help-content th { background: #f3f6fa; font-weight: 600; }
+        .help-content tr:nth-child(even) td { background: #fafbfc; }
+        .help-content code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.85em; background: #f1f3f5; padding: 1px 4px; border-radius: 3px; }
+        .help-content pre { background: #f1f3f5; padding: 10px 12px; border-radius: 4px; overflow-x: auto; }
+        .help-content pre code { background: none; padding: 0; }
+        .help-content blockquote { border-left: 4px solid #5e35b1; margin: 0 0 1em; padding: 4px 12px; background: #f5f1fb; }
+        .help-content a { color: #5e35b1; }
+        .help-nav { position: sticky; top: 64px; max-height: calc(100vh - 90px); overflow: auto; }
+        #blazor-error-ui { display: none; position: fixed; bottom: 0; left: 0; right: 0; padding: 12px 16px; background: #fde7e9; color: #a4262c; z-index: 2000; }
+        #blazor-error-ui .reload { margin-left: 12px; }
+    </style>
+</head>
+<body>
+    <div id="app"><div class="loading" id="loading-text">Loading…</div></div>
+    <div id="blazor-error-ui">
+        <span id="error-text">UI error; details in the log.</span> <a href="" class="reload" id="reload-text">Reload</a>
+    </div>
+    <script>
+        // This page is not Razor, so its few texts are switched here. The window sets window.spoLang (the language
+        // chosen in the app) before the page loads and calls spoSetLang when the user switches; without it, the OS language.
+        window.spoSetLang = function (lang) {
+            var uk = lang === 'uk';
+            document.documentElement.lang = uk ? 'uk' : 'en';
+            var set = function (id, en, ukText) { var e = document.getElementById(id); if (e) e.textContent = uk ? ukText : en; };
+            set('loading-text', 'Loading…', 'Завантаження…');
+            set('error-text', 'UI error; details in the log.', 'Помилка інтерфейсу; подробиці — у журналі.');
+            set('reload-text', 'Reload', 'Перезавантажити');
+        };
+        window.spoSetLang(window.spoLang || (navigator.language || '').slice(0, 2).toLowerCase());
+    </script>
+    <script src="_framework/blazor.webview.js"></script>
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script src="_content/SPOMover.Ui/lib/uplot/uPlot.iife.min.js"></script>
+</body>
+</html>
