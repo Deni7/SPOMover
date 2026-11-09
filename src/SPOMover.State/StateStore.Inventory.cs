@@ -22,6 +22,9 @@ public sealed partial class StateStore
             run_id INTEGER NOT NULL, file_id INTEGER NOT NULL, rule_row INTEGER, target_idx INTEGER, new_path TEXT, new_key TEXT,
             PRIMARY KEY(run_id, file_id));
         CREATE INDEX IF NOT EXISTS ix_preview_target ON mapping_preview(run_id, target_idx, new_key);
+        CREATE TABLE IF NOT EXISTS walk_queue(
+            run_id INTEGER NOT NULL, target_idx INTEGER NOT NULL, item_id TEXT NOT NULL, path TEXT NOT NULL,
+            PRIMARY KEY(run_id, target_idx, item_id));
         """;
 
     /// <summary>Columns added after a data folder was created: SQLite keeps the old table, so they are added in place.</summary>
@@ -38,6 +41,9 @@ public sealed partial class StateStore
         Ensure("targets", "checkouts", "INTEGER NOT NULL DEFAULT 0");
         Ensure("targets", "incremental", "INTEGER NOT NULL DEFAULT 0");
         Ensure("targets", "expected_items", "INTEGER");
+        Ensure("targets", "folder_walk", "INTEGER NOT NULL DEFAULT 0");
+        // Its columns lead ix_files_summary, which replaces it.
+        Exec(c, "DROP INDEX IF EXISTS ix_files_target");
         // Rows written before path_key existed: ASCII-only lower() is enough to find them again, the next listing rewrites them.
         Exec(c, "UPDATE files SET path_key = lower(path) WHERE path_key IS NULL AND path IS NOT NULL");
     }
@@ -116,10 +122,13 @@ public sealed partial class StateStore
         public double? Percent => Done ? 100 : Expected is > 0 ? Math.Min(99.9, 100.0 * (Files + Folders) / Expected.Value) : null;
     }
 
-    public IReadOnlyList<TargetProgress> GetTargetProgress(long runId)
+    public IReadOnlyList<TargetProgress> GetTargetProgress(long runId) => GetTargetProgress(runId, Summarize(runId));
+
+    /// <summary>The same from a summary already read (the dashboard reads the files once per refresh).</summary>
+    public IReadOnlyList<TargetProgress> GetTargetProgress(long runId, RunSummary summary)
     {
-        var files = Query("SELECT target_idx, COUNT(*) f, COALESCE(SUM(size),0) b, SUM(status_code LIKE 'failed:%') e FROM files WHERE run_id=$r GROUP BY target_idx",
-            r => ((int)L(r, "target_idx"), (F: L(r, "f"), B: L(r, "b"), E: L(r, "e"))), ("$r", runId)).ToDictionary(x => x.Item1, x => x.Item2);
+        var files = summary.Groups.GroupBy(g => g.TargetIndex)
+            .ToDictionary(g => g.Key, g => (F: g.Sum(x => x.Files), B: g.Sum(x => x.Bytes), E: g.Where(x => IsFailed(x.StatusCode)).Sum(x => x.Files)));
         var folders = Query("SELECT drive_id, COUNT(*) - SUM(is_root) n FROM folders WHERE run_id=$r GROUP BY drive_id",
             r => (S(r, "drive_id")!, L(r, "n")), ("$r", runId)).ToDictionary(x => x.Item1, x => x.Item2, StringComparer.Ordinal);
         return Query("SELECT idx, drive_id, done, checkouts, incremental, expected_items FROM targets WHERE run_id=$r ORDER BY idx", r =>
@@ -130,6 +139,38 @@ public sealed partial class StateStore
             return new TargetProgress(idx, L(r, "done") == 1, (int)L(r, "checkouts"), L(r, "incremental") == 1,
                 r.IsDBNull(r.GetOrdinal("expected_items")) ? null : L(r, "expected_items"), f.F, f.B, dirs, f.E);
         }, ("$r", runId));
+    }
+
+    /// <summary>
+    /// Files of a run by library, status and status code, with their size and check-outs. Everything the dashboard
+    /// counts comes from this one pass over ix_files_summary: on a run of a million files the separate counts read the
+    /// whole table several times per refresh, and that grew with every listed page.
+    /// </summary>
+    public sealed record SummaryGroup(int TargetIndex, string Status, string StatusCode, long Files, long Bytes, long CheckedOut);
+
+    public sealed record RunSummary(IReadOnlyList<SummaryGroup> Groups, long Unpublished)
+    {
+        public long Files => Groups.Sum(g => g.Files);
+        public long Bytes => Groups.Sum(g => g.Bytes);
+        public long NonFinal => Groups.Where(g => FileStatuses.NonFinal.Contains(g.Status)).Sum(g => g.Files);
+        /// <summary>The same files as <see cref="AttentionSql"/>.</summary>
+        public long Attention => Groups.Where(g => IsFailed(g.StatusCode)).Sum(g => g.Files);
+        /// <summary>As <see cref="CountCheckouts"/>: checked out in the source, and files without a published version.</summary>
+        public long Checkouts => Groups.Where(g => g.TargetIndex == 0).Sum(g => g.CheckedOut) + Unpublished;
+        public IReadOnlyDictionary<string, long> ByStatusCode =>
+            Groups.GroupBy(g => g.StatusCode).ToDictionary(g => g.Key, g => g.Sum(x => x.Files));
+    }
+
+    private static bool IsFailed(string statusCode) => statusCode.StartsWith("failed:", StringComparison.Ordinal);
+
+    public RunSummary Summarize(long runId)
+    {
+        var groups = Query(
+            "SELECT target_idx, status, status_code, COUNT(*) n, COALESCE(SUM(size),0) b, COUNT(checked_out_by) co " +
+            "FROM files INDEXED BY ix_files_summary WHERE run_id=$r GROUP BY target_idx, status, status_code",
+            r => new SummaryGroup((int)L(r, "target_idx"), S(r, "status")!, S(r, "status_code") ?? "?", L(r, "n"), L(r, "b"), L(r, "co")), ("$r", runId));
+        long unpublished = Convert.ToInt64(Scalar("SELECT COUNT(*) FROM unpublished_files WHERE run_id=$r AND target_idx=0", ("$r", runId)), CultureInfo.InvariantCulture);
+        return new RunSummary(groups, unpublished);
     }
 
     public void SetCheckoutState(long runId, int targetIndex, int state) => Write((c, tx) =>

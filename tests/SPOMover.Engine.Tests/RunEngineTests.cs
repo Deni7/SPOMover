@@ -91,6 +91,109 @@ public class RunEngineTests
     }
 
     [Fact]
+    public async Task TheDashboardSummaryMatchesTheSeparateCounts()
+    {
+        await using var env = new EngineEnv();
+        env.AddFile("Fin/a.xlsx", 10);
+        env.AddFile("Fin/b.xlsx", 20).CheckedOutBy = "Іван";
+        env.AddFile("HR/c.pdf", 30);
+        env.Graph.AddFile(env.Finance, "d.xlsx", new byte[40]);
+        long run = env.Create();
+        Assert.Equal(RunStatuses.Completed, await env.RunAsync(run));
+
+        var s = env.Store.Summarize(run);
+        Assert.Equal(env.Store.Totals(run), (s.Files, s.Bytes));
+        Assert.Equal(env.Store.CountByStatus(run), s.ByStatusCode);
+        Assert.Equal(env.Store.CountNonFinal(run), s.NonFinal);
+        Assert.Equal(env.Store.CountAttention(run), s.Attention);
+        Assert.Equal(env.Store.CountCheckouts(run), s.Checkouts);
+        Assert.Equal(1, s.Checkouts);
+        Assert.Equal([(3L, 60L), (1L, 40L)], env.Store.GetTargetProgress(run, s).Select(t => (t.Files, t.Bytes)));
+    }
+
+    [Fact]
+    public async Task AFolderIsWalkedWithoutListingTheWholeLibrary()
+    {
+        await using var env = new EngineEnv();
+        env.AddFile("Fin/2024/a.xlsx", 10);
+        env.AddFile("Fin/2024/Q1/b.xlsx", 20);
+        env.AddFile("Fin/c.docx", 30);
+        for (int i = 0; i < 30; i++)
+            env.AddFile($"Other/{i}.xlsx");
+        var p = NewProfile();
+        p.Source!.Folder = "Fin";
+
+        long run = env.Create(p);
+        var active = env.Service.Start(run);
+        Assert.Equal(RunStatuses.Completed, await active.Completion.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(["Fin/2024/Q1/b.xlsx", "Fin/2024/a.xlsx", "Fin/c.docx"], env.Files(run).Select(f => f.Path!).Order(StringComparer.Ordinal));
+        Assert.All(env.Files(run), f => Assert.Equal(FileStatuses.Listed, f.StatusCode));
+        Assert.Equal(3, active.Engine.Metrics.Found);
+        // No delta of the source library: one page of children for each of Fin, Fin/2024, Fin/2024/Q1, nothing of Other.
+        Assert.DoesNotContain(env.Graph.Log, r => r.DriveId == env.Library.Id && r.Path.Contains("/delta", StringComparison.Ordinal));
+        Assert.Equal(3, env.Graph.Log.Count(r => r.DriveId == env.Library.Id && r.Path.Contains("/children", StringComparison.Ordinal)));
+        var stats = env.Store.GetFolderStats(run, 0).ToDictionary(s => s.Path);
+        Assert.Equal((3L, 60L), (stats["Fin"].Files, stats["Fin"].Bytes));
+        Assert.Equal((2L, 30L, 1L), (stats["Fin/2024"].Files, stats["Fin/2024"].Bytes, stats["Fin/2024"].DirectFiles));
+        Assert.DoesNotContain(stats.Keys, k => k.StartsWith("Other", StringComparison.Ordinal));
+        Assert.Equal(3, env.Store.GetTargetProgress(run)[0].Folders);
+    }
+
+    [Fact]
+    public async Task AStoppedFolderWalkContinuesFromTheSavedPosition()
+    {
+        await using var env = new EngineEnv();
+        env.Graph.ChildrenPageSize = 2;
+        for (int i = 0; i < 5; i++)
+            env.AddFile($"Fin/{i}.xlsx");
+        for (int i = 0; i < 3; i++)
+            env.AddFile($"Fin/A/{i}.xlsx");
+        env.AddFile("Fin/A/B/deep.xlsx");
+        var p = NewProfile();
+        p.Source!.Folder = "Fin";
+        long run = env.Create(p);
+        int pages = 0;
+        RunService.ActiveRun? active = null;
+        env.Graph.Faults.Add(r =>
+        {
+            if (r.DriveId == env.Library.Id && r.Path.Contains("/children", StringComparison.Ordinal) && Interlocked.Increment(ref pages) == 2)
+                active!.Stop.Cancel();
+            return null;
+        });
+        active = env.Service.Start(run);
+        Assert.Equal(RunStatuses.Stopped, await active.Completion.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.True(env.Store.GetTargets(run)[0].FolderWalk);
+        Assert.False(env.Store.GetTargets(run)[0].Done);
+
+        var continued = env.Service.Start(run);
+        Assert.Equal(RunStatuses.Completed, await continued.Completion.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(9, env.Files(run).Count);
+        Assert.Contains(env.Files(run), f => f.Path == "Fin/A/B/deep.xlsx");
+        Assert.Equal(9, continued.Engine.Metrics.Found);
+        // Fin: 6 items in 3 pages, A: 4 in 2, B: 1. The stop may cost the page it interrupted, never a folder from its start.
+        Assert.InRange(pages, 6, 7);
+        Assert.Null(env.Store.NextWalkFolder(run, 0));
+    }
+
+    [Fact]
+    public async Task AnUpdateWalksAFolderAgainInFull()
+    {
+        await using var env = new EngineEnv();
+        env.AddFile("Fin/a.xlsx");
+        env.AddFile("Other/b.xlsx");
+        var p = NewProfile();
+        p.Source!.Folder = "Fin";
+        long first = env.Create(p);
+        Assert.Equal(RunStatuses.Completed, await env.RunAsync(first));
+        env.AddFile("Fin/new.xlsx");
+
+        long update = env.Service.CreateRun(RunModes.Inventory, p.Name, update: true);
+        Assert.Equal(RunStatuses.Completed, await env.RunAsync(update));
+        Assert.Equal(["Fin/a.xlsx", "Fin/new.xlsx"], env.Files(update).Select(f => f.Path!).Order(StringComparer.Ordinal));
+        Assert.False(env.Store.GetTargets(update)[0].Incremental);
+    }
+
+    [Fact]
     public async Task SourceAndTargetLibrariesAreListedSeparately()
     {
         await using var env = new EngineEnv();

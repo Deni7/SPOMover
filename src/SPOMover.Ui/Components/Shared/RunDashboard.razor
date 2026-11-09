@@ -247,7 +247,7 @@ else
         // Heavier queries less often: charts and breakdowns every 15 seconds, and at once when the run changes its status.
         bool statusChanged = _status.Run.Status != _lastStatus;
         _lastStatus = _status.Run.Status;
-        if (!statusChanged && DateTimeOffset.UtcNow - _slowRefresh < TimeSpan.FromSeconds(15))
+        if (!statusChanged && DateTimeOffset.UtcNow - _slowRefresh < SlowEvery)
             return;
         _slowRefresh = DateTimeOffset.UtcNow;
         _ = LoadSlowAsync();
@@ -265,6 +265,7 @@ else
         try
         {
             long runId = RunId;
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
             var loaded = await Task.Run(() =>
             {
                 var targets = RunConfigTargets();
@@ -277,6 +278,7 @@ else
                     .Select(k => ToTargetRow(breakdown.TryGetValue(k, out var b) ? b : new StateStore.Breakdown(k, 0, 0, 0, 0), targets)).ToList();
                 return (byFormat, byTarget, charts: Charts(Runs.Store, runId));
             });
+            _slowTook = System.Diagnostics.Stopwatch.GetElapsedTime(started);
             if (runId != RunId)
                 return;
             await InvokeAsync(() =>
@@ -291,6 +293,11 @@ else
             _slowLoading = false;
         }
     }
+    private TimeSpan _slowTook;
+
+    /// <summary>Every 15 seconds, or less often when they read long (a large run): the reads must leave the writer pauses.</summary>
+    private TimeSpan SlowEvery => TimeSpan.FromTicks(Math.Max(TimeSpan.FromSeconds(15).Ticks, _slowTook.Ticks * 10));
+
     private List<Target>? _libraries;
     private long _librariesRun;
 

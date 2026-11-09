@@ -58,7 +58,8 @@ public sealed partial class StateStore
         CREATE INDEX IF NOT EXISTS ix_files_queue ON files(run_id, status, not_before);
         CREATE INDEX IF NOT EXISTS ix_files_code ON files(run_id, status_code);
         CREATE INDEX IF NOT EXISTS ix_files_ext ON files(run_id, ext, status);
-        CREATE INDEX IF NOT EXISTS ix_files_target ON files(run_id, target_idx, status);
+        -- Covers RunSummary: the dashboard counters read this index instead of the table (NFR-2).
+        CREATE INDEX IF NOT EXISTS ix_files_summary ON files(run_id, target_idx, status, status_code, size, checked_out_by);
         CREATE TABLE IF NOT EXISTS attempts(
             id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, at TEXT NOT NULL, attempt INTEGER NOT NULL, stage TEXT NOT NULL,
             error_class TEXT, http_status INTEGER, request_id TEXT, message TEXT, app TEXT);
@@ -198,7 +199,7 @@ public sealed partial class StateStore
     {
         const string files = "SELECT id FROM files WHERE run_id=$r";
         Exec(c, $"DELETE FROM attempts WHERE file_id IN ({files})", tx, ("$r", id));
-        foreach (string table in new[] { "files", "folders", "targets", "run_metrics", "folder_stats", "unpublished_files", "run_notes", "mapping_preview" })
+        foreach (string table in new[] { "files", "folders", "targets", "run_metrics", "folder_stats", "unpublished_files", "run_notes", "mapping_preview", "walk_queue" })
             Exec(c, $"DELETE FROM {table} WHERE run_id=$r", tx, ("$r", id));
         // Plans built from this inventory refer to its files.
         foreach (string table in new[] { "plan_batches", "plan_batch_files", "plan_folders", "plan_conflicts", "plan_waves" })
@@ -248,7 +249,7 @@ public sealed partial class StateStore
 
     public IReadOnlyList<TargetRow> GetTargets(long runId) => Query("SELECT * FROM targets WHERE run_id=$r ORDER BY idx", r => new TargetRow(
         L(r, "run_id"), (int)L(r, "idx"), S(r, "drive_id"), S(r, "drive_url"), S(r, "root_item_id"), S(r, "root_path"),
-        S(r, "next_link"), S(r, "delta_link"), L(r, "done") == 1, (int)L(r, "checkouts"), L(r, "incremental") == 1), ("$r", runId));
+        S(r, "next_link"), S(r, "delta_link"), L(r, "done") == 1, (int)L(r, "checkouts"), L(r, "incremental") == 1, L(r, "folder_walk") == 1), ("$r", runId));
 
     public void SetTargetDrive(long runId, int idx, string driveId, string driveUrl, string? rootItemId, string rootPath) => Write((c, tx) =>
         Exec(c, "UPDATE targets SET drive_id=$d, drive_url=$u, root_item_id=$ri, root_path=$rp WHERE run_id=$r AND idx=$i", tx,
@@ -262,12 +263,7 @@ public sealed partial class StateStore
     public int SaveDeltaPage(long runId, int idx, IEnumerable<FolderRow> folders, IEnumerable<FileRow> files, string? nextLink, string? deltaLink,
         bool done, DateTimeOffset now) => Write((c, tx) =>
     {
-        foreach (var f in folders)
-        {
-            Exec(c, "INSERT INTO folders(run_id, drive_id, item_id, parent_id, name, is_root) VALUES($r,$d,$i,$p,$n,$root) " +
-                    "ON CONFLICT(run_id, drive_id, item_id) DO UPDATE SET parent_id=$p, name=$n, is_root=$root", tx,
-                ("$r", runId), ("$d", f.DriveId), ("$i", f.ItemId), ("$p", f.ParentId), ("$n", f.Name), ("$root", f.IsRoot ? 1 : 0));
-        }
+        SaveFolders(c, tx, runId, folders);
         int inserted = 0;
         foreach (var f in files)
             inserted += InsertFile(c, tx, f, now);
@@ -275,6 +271,53 @@ public sealed partial class StateStore
             ("$n", nextLink), ("$dl", deltaLink), ("$done", done ? 1 : 0), ("$r", runId), ("$i", idx));
         return inserted;
     });
+
+    /// <summary>
+    /// INV-1 for a folder of a library: the walk starts with the folder itself in the queue and the folders that stand
+    /// for its place in the library (<paramref name="folders"/>), so paths and folder totals work as after delta.
+    /// </summary>
+    public void StartFolderWalk(long runId, int idx, IEnumerable<FolderRow> folders, string rootItemId, string rootPath) => Write((c, tx) =>
+    {
+        SaveFolders(c, tx, runId, folders);
+        Exec(c, "INSERT OR IGNORE INTO walk_queue(run_id, target_idx, item_id, path) VALUES($r,$i,$id,$p)", tx,
+            ("$r", runId), ("$i", idx), ("$id", rootItemId), ("$p", rootPath));
+        Exec(c, "UPDATE targets SET folder_walk=1, next_link=NULL WHERE run_id=$r AND idx=$i", tx, ("$r", runId), ("$i", idx));
+    });
+
+    /// <summary>The folder the walk lists now (the oldest in the queue), null when every folder is listed.</summary>
+    public (string ItemId, string Path)? NextWalkFolder(long runId, int idx) =>
+        Query("SELECT item_id, path FROM walk_queue WHERE run_id=$r AND target_idx=$i ORDER BY rowid LIMIT 1",
+            r => ((string ItemId, string Path)?)(S(r, "item_id")!, S(r, "path")!), ("$r", runId), ("$i", idx)).FirstOrDefault();
+
+    /// <summary>
+    /// One page of a folder's children in one transaction: its subfolders join the queue, its files are saved, and the
+    /// position is kept. After the last page (<paramref name="nextLink"/> null) the folder leaves the queue.
+    /// </summary>
+    public int SaveWalkPage(long runId, int idx, string folderItemId, IReadOnlyList<(FolderRow Folder, string Path)> subfolders,
+        IEnumerable<FileRow> files, string? nextLink, DateTimeOffset now) => Write((c, tx) =>
+    {
+        SaveFolders(c, tx, runId, subfolders.Select(s => s.Folder));
+        foreach (var (folder, path) in subfolders)
+            Exec(c, "INSERT OR IGNORE INTO walk_queue(run_id, target_idx, item_id, path) VALUES($r,$i,$id,$p)", tx,
+                ("$r", runId), ("$i", idx), ("$id", folder.ItemId), ("$p", path));
+        int inserted = 0;
+        foreach (var f in files)
+            inserted += InsertFile(c, tx, f, now);
+        if (nextLink is null)
+            Exec(c, "DELETE FROM walk_queue WHERE run_id=$r AND target_idx=$i AND item_id=$id", tx, ("$r", runId), ("$i", idx), ("$id", folderItemId));
+        Exec(c, "UPDATE targets SET next_link=$n WHERE run_id=$r AND idx=$i", tx, ("$n", nextLink), ("$r", runId), ("$i", idx));
+        return inserted;
+    });
+
+    private static void SaveFolders(SqliteConnection c, SqliteTransaction tx, long runId, IEnumerable<FolderRow> folders)
+    {
+        foreach (var f in folders)
+        {
+            Exec(c, "INSERT INTO folders(run_id, drive_id, item_id, parent_id, name, is_root) VALUES($r,$d,$i,$p,$n,$root) " +
+                    "ON CONFLICT(run_id, drive_id, item_id) DO UPDATE SET parent_id=$p, name=$n, is_root=$root", tx,
+                ("$r", runId), ("$d", f.DriveId), ("$i", f.ItemId), ("$p", f.ParentId), ("$n", f.Name), ("$root", f.IsRoot ? 1 : 0));
+        }
+    }
 
     private static int InsertFile(SqliteConnection c, SqliteTransaction tx, FileRow f, DateTimeOffset now)
     {

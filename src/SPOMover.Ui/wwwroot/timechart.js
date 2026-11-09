@@ -21,16 +21,35 @@ function timeTicks(u, splits) {
 
 // The number format and the label of the time column come from the page, in the language of the UI.
 const numbers = locale => new Intl.NumberFormat(locale || undefined, { maximumFractionDigits: 1 });
+// Axis labels from a million on: "1,2 млн" instead of "1 200 000" (the legend keeps the full number).
+const compact = locale => new Intl.NumberFormat(locale || undefined, { notation: 'compact', maximumFractionDigits: 1 });
+
+const measure = document.createElement('canvas').getContext('2d');
+
+// The width of a number axis follows its longest label, so no label is cut off at the edge.
+function axisSize(font) {
+    return (u, values) => {
+        if (!values || values.length === 0)
+            return 56;
+        measure.font = font;
+        const widest = Math.max(...values.map(v => measure.measureText(v ?? '').width));
+        return Math.max(40, Math.ceil(widest) + 16);
+    };
+}
 
 function options(el, spec) {
     const axis = { stroke: '#616161', grid: { stroke: '#eeeeee' }, ticks: { stroke: '#e0e0e0' }, font: '11px Segoe UI, Roboto, sans-serif' };
     const nf = numbers(spec.locale);
-    const numberTicks = (u, splits) => splits.map(v => v == null ? '' : nf.format(v));
+    const short = compact(spec.locale);
+    const numberTicks = (u, splits) => {
+        const big = splits.some(v => v != null && Math.abs(v) >= 1e6);
+        return splits.map(v => v == null ? '' : (big ? short : nf).format(v));
+    };
     const axes = [{ ...axis, values: timeTicks, space: 60, size: 40 }];
     const scales = { x: { time: true } };
     for (const [i, name] of spec.axes.entries()) {
         scales[name] = { auto: true, range: (u, min, max) => [0, max > 0 ? max * 1.05 : 1] };
-        axes.push({ ...axis, scale: name, side: i === 0 ? 3 : 1, values: numberTicks, size: 56, grid: { ...axis.grid, show: i === 0 } });
+        axes.push({ ...axis, scale: name, side: i === 0 ? 3 : 1, values: numberTicks, size: axisSize(axis.font), grid: { ...axis.grid, show: i === 0 } });
     }
     return {
         width: Math.max(el.clientWidth, 200),

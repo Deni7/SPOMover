@@ -239,6 +239,13 @@ public sealed partial class RunEngine
             string? link = target.NextLink;
             // All pages were saved before an interruption; only the final step is left.
             bool done = link is null && target.DeltaLink is not null;
+            // A folder of a library is walked folder by folder: delta would list the whole library (see WalkFolderAsync).
+            if (target.RootItemId is not null && !target.Incremental && (target.FolderWalk || (link is null && target.DeltaLink is null)))
+            {
+                if (!await WalkFolderAsync(ctx, target, folders, ct).ConfigureAwait(false))
+                    return;
+                done = true;
+            }
             while (!done)
             {
                 await WaitWhileHeldAsync(ctx, ct).ConfigureAwait(false);
@@ -340,6 +347,87 @@ public sealed partial class RunEngine
         if (source is { Checkouts: CheckoutScan.Pending, DriveId: not null })
             await ScanCheckoutsAsync(ctx, source, ct).ConfigureAwait(false);
         ctx.EnumerationDone = true;
+    }
+
+    /// <summary>Stands for the library root above a walked folder: the folders above it are not listed.</summary>
+    private const string WalkRootId = "spomover:root";
+
+    /// <summary>
+    /// INV-1 for a folder of a library. SharePoint gives delta only from the root of a library, so listing a folder
+    /// through it reads the whole library and keeps a small part: a folder of a large library took as long as the library.
+    /// Instead the folder's children are listed folder by folder (breadth first): the requests follow the size of the
+    /// folder. The queue of folders and the position in the current one are saved with every page, so a stopped walk
+    /// continues where it was. There is no delta link: an update of the inventory walks such a folder again in full.
+    /// False when the listing failed (the reason is in <see cref="RunContext.EnumerationError"/>).
+    /// </summary>
+    private async Task<bool> WalkFolderAsync(RunContext ctx, TargetRow target, Dictionary<(string Drive, string Item), FolderRow> folders, CancellationToken ct)
+    {
+        string drive = target.DriveId!;
+        long runId = ctx.Run.Id;
+        if (!target.FolderWalk)
+        {
+            // The folder under its library path straight below a stand-in root: FolderPath and folder totals work as after delta.
+            var start = new[]
+            {
+                new FolderRow(drive, WalkRootId, null, "root", true),
+                new FolderRow(drive, target.RootItemId!, WalkRootId, target.RootPath!, false),
+            };
+            foreach (var f in start)
+                folders.TryAdd((drive, f.ItemId), f);
+            _store.StartFolderWalk(runId, target.Index, start, target.RootItemId!, target.RootPath!);
+        }
+
+        string? link = target.FolderWalk ? target.NextLink : null;
+        int failures = 0;
+        while (_store.NextWalkFolder(runId, target.Index) is { } current)
+        {
+            await WaitWhileHeldAsync(ctx, ct).ConfigureAwait(false);
+            DeltaPage page;
+            try
+            {
+                page = await ctx.Pool.Primary.Client.GetChildrenPageAsync(drive, current.ItemId, link, ct).ConfigureAwait(false);
+                failures = 0;
+            }
+            catch (SpoException ex) when (ex is not SpoBlockedException && ex.ErrorClass == ErrorClass.Transient && ++failures <= 5)
+            {
+                _logger.LogWarning("Listing target {Target}: {Message}; continuing from the same position", target.Index, ex.Message);
+                Metrics.AddError("transient");
+                await Task.Delay(_options.EnumerationRetryDelay, _time, ct).ConfigureAwait(false);
+                continue;
+            }
+            catch (SpoException ex)
+            {
+                ctx.EnumerationError = L.T($"Listing files of target {target.Index + 1}: {ex.Message}");
+                _abortReason ??= ctx.EnumerationError;
+                return false;
+            }
+
+            var subfolders = page.Items.Where(i => i.IsFolder && !i.Deleted)
+                .Select(i => (Folder: new FolderRow(drive, i.Id, current.ItemId, i.Name, false), Path: Combine(current.Path, i.Name)))
+                .ToList();
+            foreach (var (f, _) in subfolders)
+                folders[(drive, f.ItemId)] = f;
+            var files = page.Items.Where(i => i.IsFile && !i.Deleted).Select(item => new FileRow
+            {
+                RunId = runId,
+                TargetIndex = target.Index,
+                DriveId = drive,
+                ItemId = item.Id,
+                ParentId = current.ItemId,
+                Name = item.Name,
+                Path = Combine(current.Path, item.Name),
+                Size = item.Size,
+                ETag = item.ETag,
+                Modified = item.Modified,
+                ModifiedBy = item.ModifiedBy,
+                CheckedOutBy = item.CheckedOutBy,
+                Status = FileStatuses.Listed,
+            }).ToList();
+            int saved = _store.SaveWalkPage(runId, target.Index, current.ItemId, subfolders, files, page.NextLink, Now);
+            Metrics.AddFound(saved);
+            link = page.NextLink;
+        }
+        return true;
     }
 
     /// <summary>

@@ -36,6 +36,9 @@ public sealed class FakeGraph : HttpMessageHandler
     /// <summary>Delta returns files before their folders (allowed by Graph; tests path resolution).</summary>
     public bool FilesBeforeFolders { get; set; }
 
+    /// <summary>Items per page of /children (Graph pages by $top; the fake by this number, "skip=N" in nextLink).</summary>
+    public int ChildrenPageSize { get; set; } = int.MaxValue;
+
     /// <summary>Called for every request before normal handling; a non-null response is returned as is.</summary>
     public List<Func<FakeRequest, HttpResponseMessage?>> Faults { get; } = [];
 
@@ -430,10 +433,18 @@ public sealed class FakeGraph : HttpMessageHandler
                 var cs = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
                 var d = _drives[cs[1]];
                 string parentId = cs[2] == "root" ? d.Root.Id : cs[3];
+                int skip = uri.Query.Contains("skip=", StringComparison.Ordinal)
+                    ? int.Parse(uri.Query.Split("skip=")[1].Split('&')[0], System.Globalization.CultureInfo.InvariantCulture) : 0;
                 var children = new JsonArray();
-                foreach (var child in d.Items.Values.Where(i => i.ParentId == parentId))
+                List<FakeItem> all;
+                lock (_sync)
+                    all = d.Items.Values.Where(i => i.ParentId == parentId).ToList();
+                foreach (var child in all.Skip(skip).Take(ChildrenPageSize))
                     children.Add(ItemJson(d, child));
-                return Json(new JsonObject { ["value"] = children });
+                var page = new JsonObject { ["value"] = children };
+                if (skip + ChildrenPageSize < all.Count)
+                    page["@odata.nextLink"] = $"{uri.GetLeftPart(UriPartial.Path)}?skip={skip + ChildrenPageSize}";
+                return Json(page);
             }
             // /sites/{host}:/{path}  or /sites/{host}
             if (path.StartsWith("/sites/", StringComparison.Ordinal) && !path.Contains("/drives", StringComparison.Ordinal))
@@ -896,6 +907,7 @@ public sealed class FakeGraph : HttpMessageHandler
         "GET" when r.Path.Contains("/content", StringComparison.Ordinal) => RequestCost.Download,
         "GET" when r.Path.Contains("/delta", StringComparison.Ordinal) => r.Path.Contains("token=", StringComparison.Ordinal) ? RequestCost.DeltaWithToken : RequestCost.List,
         "GET" when r.Path.EndsWith("/drives?$select=id,name,webUrl", StringComparison.Ordinal) => RequestCost.List,
+        "GET" when r.Path.Contains("/children", StringComparison.Ordinal) => RequestCost.List,
         "GET" => RequestCost.Get,
         "PUT" when r.Path.StartsWith(UploadBase, StringComparison.Ordinal) => RequestCost.UploadChunk,
         _ => RequestCost.Upload,

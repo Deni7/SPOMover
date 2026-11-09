@@ -292,6 +292,23 @@ public sealed class GraphClient
         SendJsonAsync(() => new HttpRequestMessage(HttpMethod.Get, $"{_options.BaseUrl}/drives/{driveId}/root:/{EscapePath(path.Trim('/'))}"),
             RequestCost.Get, SpoItem.Parse, "folder", ct);
 
+    /// <summary>
+    /// INV-1 for a folder of a library: a page of the children of one folder (files and subfolders) with the same fields
+    /// as delta. Delta works only from the root of a SharePoint library, so a folder is walked folder by folder instead of
+    /// listing the whole library and dropping what lies outside. <paramref name="link"/> is the saved nextLink; the
+    /// result has no delta link.
+    /// </summary>
+    public Task<DeltaPage> GetChildrenPageAsync(string driveId, string itemId, string? link, CancellationToken ct)
+    {
+        string url = link ?? $"{_options.BaseUrl}/drives/{driveId}/items/{itemId}/children?$select=id,name,size,file,folder,parentReference,eTag,cTag,lastModifiedDateTime,lastModifiedBy,publication&$top=999";
+        return SendJsonAsync(() => new HttpRequestMessage(HttpMethod.Get, url), RequestCost.List,
+            e => new DeltaPage(
+                e.GetProperty("value").EnumerateArray().Select(SpoItem.Parse).ToList(),
+                e.TryGetProperty("@odata.nextLink", out var n) ? n.GetString() : null,
+                null),
+            "children", ct);
+    }
+
     /// <summary>ENU-1: a page of root delta; <paramref name="link"/> is the saved nextLink to continue from.</summary>
     public Task<DeltaPage> GetDeltaPageAsync(string driveId, string? link, CancellationToken ct)
     {

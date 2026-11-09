@@ -124,7 +124,8 @@ public sealed record TargetRow(
     string? DeltaLink,
     bool Done,
     int Checkouts = CheckoutScan.Pending,
-    bool Incremental = false);
+    bool Incremental = false,
+    bool FolderWalk = false);
 
 /// <summary>
 /// INV-3: state of the scan for files without a published version (REST) in a run. Checked-out files come with the

@@ -71,7 +71,7 @@ The work goes in three steps; stages 1–2 provide the first two.
 **1. Inventory** — for the source library and every target library:
 
 1. Resolves the site, the library and (if set) the folder, and checks that the app has access to them.
-2. Gets the list of all files and folders of the library through Microsoft Graph (delta), page by page.
+2. Gets the list of all files and folders of the library through Microsoft Graph (delta), page by page. When the profile names a folder of the library, only that folder is walked, folder by folder: in SharePoint delta works only from the library root, and listing a folder through it would take as long as listing the whole library. Such a walk also continues after a stop, but a "changes only" update walks the folder again in full.
 3. Writes every page to the state database together with the position to continue from. After a stop or a failure the listing continues from the same page, not from the beginning.
 4. Stores the path, size, format, and who changed each file and when.
 5. At the end calculates for every folder: how many files and how much data it holds including all subfolders, and the longest path.
