@@ -65,6 +65,7 @@ spo-mover verify <прогін> --update
 ## Документація
 
 - [Інструкція користувача](docs/USER_GUIDE.uk.md) (вбудована в застосунок як довідка) — [англійською](docs/USER_GUIDE.md)
+- Зміни між версіями (англійською) — [CHANGELOG.md](CHANGELOG.md)
 - Вимоги — [docs/FEATURES.md](docs/FEATURES.md)
 - План і етапи — [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 - Результати перевірки Copy/Move API — [docs/API_SPIKE.md](docs/API_SPIKE.md)

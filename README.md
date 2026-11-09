@@ -65,6 +65,7 @@ Translations live in `src/SPOMover.Core/Localization/<lang>/*.json` as `"English
 ## Documentation
 
 - [User guide](docs/USER_GUIDE.md) (also built into the app as Help) — [Ukrainian](docs/USER_GUIDE.uk.md)
+- [Changelog](CHANGELOG.md)
 - Requirements (Ukrainian): [docs/FEATURES.md](docs/FEATURES.md)
 - Implementation plan and stages (Ukrainian): [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 - Copy/Move API findings (Ukrainian): [docs/API_SPIKE.md](docs/API_SPIKE.md)
